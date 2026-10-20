@@ -187,9 +187,9 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
       .map { call =>
         call -> {
           val retVal = List(call)
-          val args   = call.argument
-            .filter(hasValidGenType)
-            .l
+          val args   =
+            if (call.name == Operators.arrayInitializer || isInitializerEntry(call)) Nil
+            else call.argument.filter(hasValidGenType).l
           mutable.BitSet(
             (retVal ++ args)
               .collect {
@@ -200,6 +200,19 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
         }
       }
     (defsForParams ++ defsForCalls).toMap
+  }
+
+  /** An initializer list defines the value it builds and nothing else: it does not write to its entries. An entry that
+    * the list holds as an assignment to the member it sets (`r` in `{ r }`, written `.read = r`) likewise defines only
+    * itself, the part of the object the list fills; the member it names is not a variable that later code reads.
+    */
+  private def isInitializerEntry(node: Expression): Boolean = node match {
+    case call: Call if call.name == Operators.assignment =>
+      call.astParent match {
+        case list: Call => list.name == Operators.arrayInitializer
+        case _          => false
+      }
+    case _ => false
   }
 
   /** Restricts the types of nodes that represent definitions.

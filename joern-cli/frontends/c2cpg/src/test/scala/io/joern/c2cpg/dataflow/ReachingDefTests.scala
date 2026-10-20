@@ -1,7 +1,12 @@
 package io.joern.c2cpg.dataflow
 
 import io.joern.c2cpg.testfixtures.DataFlowCodeToCpgSuite
-import io.joern.dataflowengineoss.passes.reachingdef.ReachingDefFlowGraph
+import io.joern.dataflowengineoss.language.*
+import io.joern.dataflowengineoss.passes.reachingdef.{
+  ReachingDefFlowGraph,
+  ReachingDefProblem,
+  ReachingDefTransferFunction
+}
 import io.shiftleft.codepropertygraph.generated.nodes.Identifier
 import io.shiftleft.semanticcpg.language.*
 
@@ -124,5 +129,32 @@ class ReachingDefTests extends DataFlowCodeToCpgSuite {
       flowGraph.pred(fooMethod.methodReturn) shouldBe List(paramOut2)
     }
 
+  }
+
+  "An initializer table" should {
+    val cpg = code("""
+      |struct cfg { int len; int max; };
+      |void sink(int);
+      |int foo() {
+      | struct cfg t[2] = { { 1, 2 }, { 3, 4 } };
+      | struct cfg c = { 5, 6 };
+      | sink(c.max);
+      |}
+      |""".stripMargin)
+
+    "count each list and each entry it sets as one definition" in {
+      val fooMethod = cpg.method("foo").head
+      val gen     = ReachingDefProblem.create(fooMethod).transferFunction.asInstanceOf[ReachingDefTransferFunction].gen
+      val lists   = fooMethod.ast.isCall.nameExact("<operator>.arrayInitializer").l
+      val entries = lists.argument.isCall.nameExact("<operator>.assignment").l
+      lists.map(gen(_).size) shouldBe List(1, 1, 1, 1)
+      entries.map(gen(_).size) shouldBe List(1, 1, 1, 1, 1, 1)
+    }
+
+    "still carry an entry's value to a use of the object" in {
+      val source = cpg.literal.code("6")
+      val sink   = cpg.call("sink").argument
+      sink.reachableByFlows(source).l should not be empty
+    }
   }
 }

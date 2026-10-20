@@ -1354,10 +1354,11 @@ class AstCreationPassTests extends AstC2CpgSuite {
       """.stripMargin)
       val List(localMyOtherFs) = cpg.method("main").local.nameExact("my_other_fs").l
       localMyOtherFs.order shouldBe 2
-      localMyOtherFs.referencingIdentifiers.name.l shouldBe List("my_other_fs")
+      // The variable itself and the base of the table entry `.open = &my_open`, which sets its member.
+      localMyOtherFs.referencingIdentifiers.name.l shouldBe List("my_other_fs", "my_other_fs")
       val List(localMyFs) = cpg.local.nameExact("my_fs").l
       localMyFs.order shouldBe 3
-      localMyFs.referencingIdentifiers.name.l shouldBe List("my_fs")
+      localMyFs.referencingIdentifiers.name.l shouldBe List("my_fs", "my_fs")
       cpg.typeDecl.nameNot(NamespaceTraversal.globalNamespaceName).fullName.l shouldBe List(
         "filesystem",
         "my_open",
@@ -2088,19 +2089,21 @@ class AstCreationPassTests extends AstC2CpgSuite {
       val List(methodA, methodB) = cpg.method.nameNot("<global>").l
       inside(cpg.call.nameExact(Operators.arrayInitializer).argument.isBlock.astChildren.l) {
         case List(callA: Call, callB: Call) =>
-          val argsAIdent = callA.argument(1).asInstanceOf[Identifier]
+          // A designator is a field access on the variable it initializes: `.a` is `bar.a`.
+          val argsAField = callA.argument(1).asInstanceOf[Call]
           val argARef    = callA.argument(2).asInstanceOf[MethodRef]
-          argsAIdent.order shouldBe 1
-          argsAIdent.name shouldBe "a"
-          argsAIdent.code shouldBe "a"
+          argsAField.order shouldBe 1
+          argsAField.name shouldBe Operators.fieldAccess
+          argsAField.code shouldBe ".a"
+          argsAField.argument.code.l shouldBe List("bar", "a")
           argARef.order shouldBe 2
           argARef.methodFullName shouldBe methodA.fullName
           argARef.typeFullName shouldBe methodA.methodReturn.typeFullName
-          val argsBIdent = callB.argument(1).asInstanceOf[Identifier]
+          val argsBField = callB.argument(1).asInstanceOf[Call]
           val argBRef    = callB.argument(2).asInstanceOf[MethodRef]
-          argsBIdent.order shouldBe 1
-          argsBIdent.code shouldBe "b"
-          argsBIdent.name shouldBe "b"
+          argsBField.order shouldBe 1
+          argsBField.code shouldBe ".b"
+          argsBField.argument.code.l shouldBe List("bar", "b")
           argBRef.order shouldBe 2
           argBRef.methodFullName shouldBe methodB.fullName
           argBRef.typeFullName shouldBe methodB.methodReturn.typeFullName
@@ -2414,17 +2417,18 @@ class AstCreationPassTests extends AstC2CpgSuite {
         call.order shouldBe 2
         call.name shouldBe Operators.arrayInitializer
         call.methodFullName shouldBe Operators.arrayInitializer
-        val children = call.astMinusRoot.isCall.l
+        val children = call.astMinusRoot.isCall.nameExact(Operators.assignment).l
         val args     = call.argument.astChildren.l
         inside(children) { case List(call1, call2) =>
           call1.code shouldBe ".a = 1"
           call1.name shouldBe Operators.assignment
-          call1.astMinusRoot.code.l shouldBe List("a", "1")
-          call1.argument.code.l shouldBe List("a", "1")
+          // A designator is a field access on the variable it initializes: `.a` is `b.a`.
+          call1.astMinusRoot.code.l shouldBe List(".a", "b", "a", "1")
+          call1.argument.code.l shouldBe List(".a", "1")
           call2.code shouldBe ".b = 2"
           call2.name shouldBe Operators.assignment
-          call2.astMinusRoot.code.l shouldBe List("b", "2")
-          call2.argument.code.l shouldBe List("b", "2")
+          call2.astMinusRoot.code.l shouldBe List(".b", "b", "b", "2")
+          call2.argument.code.l shouldBe List(".b", "2")
         }
         children shouldBe args
       }

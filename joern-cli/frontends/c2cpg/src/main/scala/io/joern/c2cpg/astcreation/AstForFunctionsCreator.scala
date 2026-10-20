@@ -10,6 +10,7 @@ import org.eclipse.cdt.core.dom.ast.*
 import org.eclipse.cdt.core.dom.ast.cpp.*
 import org.eclipse.cdt.core.dom.ast.cpp.ICPPASTLambdaExpression.CaptureDefault
 import org.eclipse.cdt.core.dom.ast.gnu.c.ICASTKnRFunctionDeclarator
+import org.eclipse.cdt.internal.core.dom.parser.ASTQueries
 import org.eclipse.cdt.internal.core.dom.parser.c.{CASTFunctionDeclarator, CASTParameterDeclaration, CVariable}
 import org.eclipse.cdt.internal.core.dom.parser.cpp.*
 import org.eclipse.cdt.internal.core.model.ASTStringUtil
@@ -78,6 +79,16 @@ trait AstForFunctionsCreator { this: AstCreator =>
         )
         registerMethodDeclaration(fullName, methodInfo)
         Ast()
+      case Some(_: IField) if ASTQueries.findInnermostDeclarator(funcDecl).getName.isInstanceOf[ICPPASTQualifiedName] =>
+        // Out-of-class definition of a static member (`int (*S::fp)(int) = nullptr;`): the member is in its class.
+        Ast()
+      case Some(field: IField) =>
+        // A function pointer member of a struct, union or class, e.g. `int (*read)(struct dev *d)`: the struct's
+        // method in object-oriented C, so that a call through it (`d.ops.read(d)`) can reach the member.
+        val name       = shortName(funcDecl)
+        val tpe        = safeCdtCall(safeGetType(field.getType)).getOrElse(Defines.Any)
+        val codeString = code(funcDecl.getParent)
+        Ast(memberNode(funcDecl, name, codeString, registerType(tpe)))
       case Some(variable: (CVariable | CPPVariable)) =>
         val name       = shortName(funcDecl)
         val tpe        = safeCdtCall(safeGetType(variable.getType)).getOrElse(Defines.Any)
@@ -85,14 +96,6 @@ trait AstForFunctionsCreator { this: AstCreator =>
         val node       = localNode(funcDecl, name, codeString, registerType(tpe))
         scope.addVariable(name, node, tpe, VariableScopeManager.ScopeType.BlockScope)
         Ast(node)
-      case Some(field: IField) =>
-        // TODO create a member for the field
-        // We get here a least for function pointer member declarations in classes like:
-        // class A {
-        //   public:
-        //     void (*foo)(int);
-        // };
-        Ast()
       case Some(typeDef: ITypedef) =>
         // TODO handle typeDecl for now we just ignore this.
         Ast()
