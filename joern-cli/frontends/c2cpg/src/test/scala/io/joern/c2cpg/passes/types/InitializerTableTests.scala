@@ -256,6 +256,31 @@ class InitializerTableArrayDesignatedListTests extends C2CpgSuite {
   }
 }
 
+class InitializerTableMacroNamedTests extends C2CpgSuite {
+
+  "A table whose name a macro builds" should {
+    val cpg = code("""
+        |#define CONCAT(a, b) a##b
+        |#define DECLARE_OPS(name, fn) static struct ops CONCAT(ops_, name) = { .read = fn }
+        |struct ops { int (*read)(int); };
+        |int r(int c) { return c; }
+        |DECLARE_OPS(uart, r);
+        |""".stripMargin)
+
+    "set the member of the variable the macro declares, by the variable's name" in {
+      cpg.local.name.l.sorted shouldBe List("ops_uart")
+      cpg.fieldAccess.argument(1).isIdentifier.name.l shouldBe List("ops_uart")
+      cpg.local
+        .nameExact("ops_uart")
+        .referencingIdentifiers
+        .astParent
+        .isCall
+        .nameExact("<operator>.fieldAccess")
+        .size shouldBe 1
+    }
+  }
+}
+
 class InitializerTableNestedPositionTests extends C2CpgSuite {
 
   "A nested table list" should {

@@ -136,7 +136,8 @@ trait AstForInitializersCreator { this: AstCreator =>
 
   private def variableObject(name: IASTName): Option[InitializedObject] =
     safeGetBinding(name).collect { case binding: IVariable =>
-      val variable = code(name)
+      // The variable's own name: the code of a name a macro builds, as in `DECLARE_OPS(uart, r)`, is the macro's call.
+      val variable = shortName(name)
       InitializedObject(
         variable,
         binding.getType,
