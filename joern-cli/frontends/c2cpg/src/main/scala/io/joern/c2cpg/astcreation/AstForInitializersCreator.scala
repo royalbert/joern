@@ -8,7 +8,8 @@ import org.eclipse.cdt.core.dom.ast.cpp.{
   ICPPASTArrayDesignator,
   ICPPASTConstructorInitializer,
   ICPPASTDesignatedInitializer,
-  ICPPASTFieldDesignator
+  ICPPASTFieldDesignator,
+  ICPPBinding
 }
 import org.eclipse.cdt.internal.core.dom.parser.ASTQueries
 import org.eclipse.cdt.internal.core.dom.parser.c.CASTArrayRangeDesignator
@@ -107,6 +108,28 @@ trait AstForInitializersCreator { this: AstCreator =>
     case other                     => other
   }
 
+  /** The name of `tpe` as the type that declares the members of an object of that type: a struct, union or class
+    * without a tag is declared under the name of the typedef that names it (`typedef struct { ... } ops_t;`), which its
+    * own name, being empty, cannot give.
+    */
+  private def declaringTypeName(tpe: IType): String = untaggedTypedef(tpe) match {
+    case Some(cppTypedef: ICPPBinding) => safeCdtCall(cppTypedef.getQualifiedName.mkString(".")).getOrElse(Defines.Any)
+    case Some(typedef)                 => typedef.getName
+    case None                          => safeGetType(tpe)
+  }
+
+  /** The typedef that names the struct, union or class without a tag that `tpe` is, if there is one. */
+  private def untaggedTypedef(tpe: IType): Option[ITypedef] = tpe match {
+    case qualified: IQualifierType => untaggedTypedef(qualified.getType)
+    case typedef: ITypedef         =>
+      bare(typedef) match {
+        case composite: ICompositeType if composite.getName.isEmpty =>
+          untaggedTypedef(typedef.getType).orElse(Some(typedef))
+        case _ => None
+      }
+    case _ => None
+  }
+
   /** The object the initializer list `list` fills: the variable it initializes, or the element or member of the object
     * an enclosing list fills that `list` sets. None where there is no named object, as for a compound literal.
     */
@@ -142,7 +165,7 @@ trait AstForInitializersCreator { this: AstCreator =>
         variable,
         binding.getType,
         at => {
-          val tpe = registerType(safeGetType(binding.getType))
+          val tpe = registerType(declaringTypeName(binding.getType))
           val id  = identifierNode(at, variable, variable, tpe)
           scope.addVariableReference(variable, id, tpe, EvaluationStrategies.BY_REFERENCE)
           Ast(id)
@@ -164,7 +187,15 @@ trait AstForInitializersCreator { this: AstCreator =>
           at => {
             val op     = Operators.indexAccess
             val access =
-              callNode(at, code_, op, op, DispatchTypes.STATIC_DISPATCH, None, Some(registerType(safeGetType(element))))
+              callNode(
+                at,
+                code_,
+                op,
+                op,
+                DispatchTypes.STATIC_DISPATCH,
+                None,
+                Some(registerType(declaringTypeName(element)))
+              )
             val indexAst = indexExpr.map(astForNode).getOrElse(Ast(literalNode(at, index, registerType("int"))))
             callAst(access, List(filled.ast(at), indexAst))
           }
@@ -339,7 +370,7 @@ trait AstForInitializersCreator { this: AstCreator =>
         op,
         DispatchTypes.STATIC_DISPATCH,
         None,
-        Some(registerType(safeGetType(field.getType)))
+        Some(registerType(declaringTypeName(field.getType)))
       )
     callAst(access, List(filled.ast(at), Ast(fieldIdentifierNode(at, member, member))))
   }

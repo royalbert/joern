@@ -328,3 +328,32 @@ class InitializerTableUndefinedStructTests extends C2CpgSuite {
     }
   }
 }
+
+class InitializerTableTypedefTests extends C2CpgSuite {
+
+  "A table whose struct a typedef names" should {
+    val cpg = code("""
+        |typedef struct { int (*read)(int); } ops_t;
+        |typedef struct tops_s { int (*read)(int); } tops_t;
+        |struct dev { ops_t ops; tops_t tops; };
+        |static int r(int x) { return x; }
+        |static const ops_t untagged = { r };
+        |static const tops_t tagged = { .read = r };
+        |static struct dev d = { { r }, { .read = r } };
+        |""".stripMargin)
+
+    "link each entry to the member it sets, also where the struct has no tag" in {
+      val ties =
+        cpg.assignment.filter(_.code.startsWith(".read")).target.isCall.collectAll[OpNodes.FieldAccess].map { access =>
+          val members = access.referencedMember.map(member => s"${member.typeDecl.fullName}.${member.name}").l
+          access.argument(1).code -> members
+        }
+      ties.l.sortBy(_._1) shouldBe List(
+        "d.ops"    -> List("ops_t.read"),
+        "d.tops"   -> List("tops_s.read"),
+        "tagged"   -> List("tops_s.read"),
+        "untagged" -> List("ops_t.read")
+      )
+    }
+  }
+}
