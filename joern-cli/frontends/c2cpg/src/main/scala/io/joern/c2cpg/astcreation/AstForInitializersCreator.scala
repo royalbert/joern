@@ -15,6 +15,7 @@ import org.eclipse.cdt.core.dom.ast.cpp.{
 import org.eclipse.cdt.internal.core.dom.parser.{ASTInternal, ASTQueries}
 import org.eclipse.cdt.internal.core.dom.parser.c.CASTArrayRangeDesignator
 import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPASTArrayRangeDesignator
+import org.eclipse.cdt.internal.core.dom.parser.cpp.semantics.TypeTraits
 
 import scala.annotation.tailrec
 import scala.collection.mutable
@@ -102,6 +103,9 @@ trait AstForInitializersCreator { this: AstCreator =>
     * in (C17 6.7.2.1p13).
     */
   private case class AnonymousSlot(tpe: ICompositeType) extends Slot
+
+  /** A base class of a C++ aggregate, which takes an entry before its members do and is no member. */
+  private case class BaseSlot(tpe: IType) extends Slot
 
   /** An object an initializer list fills, as C writes it (`uart`, `many[1]`, `ou.o`), with its type and an expression
     * that names it at a given node.
@@ -286,11 +290,12 @@ trait AstForInitializersCreator { this: AstCreator =>
     def next: Frame   = copy(index = index + 1)
   }
 
-  /** The first position in `obj`; None where its elements are unknown, and for a C++ `class`, whose positional entries
-    * are left as they are.
+  /** The first position in `obj`; None where its elements are unknown, and for a C++ class that is no aggregate, whose
+    * list's entries are its constructor's arguments.
     */
   private def frameOf(obj: InitializedObject): Option[Frame] = bare(obj.tpe) match {
-    case composite: ICompositeType if composite.getKey != ICPPClassType.k_class =>
+    case cls: ICPPClassType if !safeCdtCall(TypeTraits.isAggregateClass(cls)).contains(true) => None
+    case composite: ICompositeType                                                           =>
       elementsOf(composite).map(elements =>
         Frame(obj, elements.lift, Some(elements.size), 0, composite.getKey == ICompositeType.k_union)
       )
@@ -371,17 +376,21 @@ trait AstForInitializersCreator { this: AstCreator =>
       )
       .nextOption()
 
-  /** The elements of a struct or union that an initializer list sets in order: its named members and its anonymous
-    * struct and union members, one element each; unnamed bit-fields take no part (C17 6.7.9p9). None where its
-    * definition is not visible.
+  /** The elements of a struct, union or class that an initializer list sets in order: the base classes of a C++ class
+    * (C++17 [dcl.init.aggr]), then its named members and its anonymous struct and union members, one element each;
+    * unnamed bit-fields and static members take no part (C17 6.7.9p9). None where its definition is not visible.
     */
   private def elementsOf(composite: ICompositeType): Option[Vector[Slot]] =
     compositeElements.getOrElseUpdate(composite, elementsOfUncached(composite))
 
   private val compositeElements = mutable.HashMap.empty[ICompositeType, Option[Vector[Slot]]]
 
-  private def elementsOfUncached(composite: ICompositeType): Option[Vector[Slot]] =
-    safeCdtCall(ASTInternal.getPhysicalNodeOfScope(composite.getCompositeScope)).collect {
+  private def elementsOfUncached(composite: ICompositeType): Option[Vector[Slot]] = {
+    val bases = composite match {
+      case cls: ICPPClassType => safeCdtCall(cls.getBases.toVector.map(base => BaseSlot(base.getBaseClassType)))
+      case _                  => Some(Vector.empty)
+    }
+    val members = safeCdtCall(ASTInternal.getPhysicalNodeOfScope(composite.getCompositeScope)).collect {
       case definition: IASTCompositeTypeSpecifier =>
         definition.getMembers.toVector.flatMap {
           case member: IASTSimpleDeclaration if member.getDeclarators.isEmpty =>
@@ -399,6 +408,8 @@ trait AstForInitializersCreator { this: AstCreator =>
           case _ => Vector.empty
         }
     }
+    for { baseElements <- bases; memberElements <- members } yield baseElements ++ memberElements
+  }
 
   /** The members of `composite`; none where its definition is not visible, for which CDT gives one problem field named
     * after the struct.
@@ -523,7 +534,7 @@ trait AstForInitializersCreator { this: AstCreator =>
         case MemberSlot(field) =>
           fieldDesignatorName(last).map(name => fieldAccessAst(filled, field, code(name), code(last), last))
         case element: ElementSlot if !isRangeDesignator(last) => objectAt(filled, element).map(_.ast(last))
-        case _: ElementSlot | _: AnonymousSlot                => None
+        case _: ElementSlot | _: AnonymousSlot | _: BaseSlot  => None
       }
     } yield target
 

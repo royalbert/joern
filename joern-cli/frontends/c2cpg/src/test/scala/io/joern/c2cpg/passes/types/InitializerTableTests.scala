@@ -1,5 +1,6 @@
 package io.joern.c2cpg.passes.types
 
+import io.joern.c2cpg.parser.FileDefaults
 import io.joern.c2cpg.testfixtures.C2CpgSuite
 import io.shiftleft.semanticcpg.language.*
 import io.shiftleft.semanticcpg.language.operatorextension.OpNodes
@@ -475,6 +476,58 @@ class InitializerTableDesignatorChainTests extends C2CpgSuite {
         ("chained.ops[1]", "write", "w")
       )
       ties(7) shouldBe List(("element", "extra", "r"), ("element.ops[0]", "read", "r"), ("element.ops[1]", "read", "w"))
+    }
+  }
+}
+
+class InitializerTableCppAggregateTests extends C2CpgSuite(FileDefaults.CppExt) {
+
+  "Positional entries of a C++ list" should {
+    val cpg = code("""
+        |struct ops { int (*read)(int); int (*write)(int); };
+        |class cops { public: int (*read)(int); int (*write)(int); };
+        |struct ctor { ctor(int (*a)(int), int (*b)(int)); int (*read)(int); int (*write)(int); };
+        |struct base { int (*read)(int); };
+        |struct derived : base { int (*write)(int); };
+        |struct counted { static int count; int (*read)(int); };
+        |int r(int c) { return c; }
+        |int w(int c) { return c; }
+        |ops plain = { r, w };
+        |cops of_class = { r, w };
+        |ctor constructed = { r, w };
+        |derived with_base = { { r }, w };
+        |counted with_static = { r };
+        |""".stripMargin)
+
+    /** (entry, member it reaches) for every entry on `line` that sets a member. */
+    def ties(line: Int): List[(String, String)] =
+      cpg.assignment
+        .lineNumber(line)
+        .filter(_.code.startsWith("."))
+        .flatMap { assignment =>
+          Iterator(assignment.target).isCall
+            .collectAll[OpNodes.FieldAccess]
+            .referencedMember
+            .map(member => assignment.code -> s"${member.typeDecl.fullName}.${member.name}")
+        }
+        .l
+        .sorted
+
+    "set the members of an aggregate, a struct or a class" in {
+      ties(10) shouldBe List(".read = r" -> "ops.read", ".write = w" -> "ops.write")
+      ties(11) shouldBe List(".read = r" -> "cops.read", ".write = w" -> "cops.write")
+    }
+
+    "leave the entries of a class that is not an aggregate, which go to its constructor" in {
+      ties(12) shouldBe empty
+    }
+
+    "give a base class the entries before the members (C++17 [dcl.init.aggr])" in {
+      ties(13) shouldBe List(".write = w" -> "derived.write")
+    }
+
+    "give a static member no entry" in {
+      ties(14) shouldBe List(".read = r" -> "counted.read")
     }
   }
 }
