@@ -312,10 +312,12 @@ trait AstForFunctionsCreator { this: AstCreator =>
           callNode(init, codeString, op, op, DispatchTypes.STATIC_DISPATCH, None, Some(registerType(Defines.Void)))
         callAst(assignmentCall, List(leftAst, rightAst))
       case c: ICPPASTConstructorInitializer if init.getMemberInitializerId.isInstanceOf[ICPPASTQualifiedName] =>
-        val constructorCallName = shortName(init.getMemberInitializerId)
-        val typeFullName        = fullName(init.getMemberInitializerId)
-        val signature           = s"${Defines.Void}(${initializerSignature(c)})"
-        val fullNameWithSig     = s"$typeFullName.$constructorCallName:$signature"
+        val constructorCallName          = shortName(init.getMemberInitializerId)
+        val typeFullName                 = fullName(init.getMemberInitializerId)
+        val (fullNameWithSig, signature) = calledConstructorFullNameAndSignature(init).getOrElse {
+          val signature = s"${Defines.Void}(${initializerSignature(c)})"
+          (s"$typeFullName.$constructorCallName:$signature", signature)
+        }
         val constructorCallCode = code(init)
         val args                = astsForConstructorInitializer(c)
         constructorInvocationBlockAst(init, typeFullName, fullNameWithSig, signature, constructorCallCode, args)

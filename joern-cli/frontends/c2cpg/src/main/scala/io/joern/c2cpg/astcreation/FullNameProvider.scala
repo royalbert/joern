@@ -186,6 +186,79 @@ trait FullNameProvider { this: AstCreator =>
     StringUtils.normalizeSpace(s"$returnType${parameterListSignature(methodLike)}$constFlag")
   }
 
+  /** The signature of the method that a call to `function` links to, made the way that method's own full name is made:
+    * from the definition of `function` if this translation unit holds it, else from its first declaration. `None` if it
+    * holds neither, and for template specializations.
+    *
+    * A call takes its signature from here and not from CDT's function type, because the function type writes a typedef
+    * as the type it names (`u16` becomes `unsigned short`) while the method's full name keeps the typedef's name.
+    */
+  protected def declaredSignature(function: ICPPFunction): Option[String] = {
+    declaringDeclarator(function).map { declarator =>
+      function match {
+        case _: ICPPConstructor => signature(Defines.Void, declarator)
+        case _                  => functionSignature(function, declarator)
+      }
+    }
+  }
+
+  /** The full name and signature of the constructor that `node` (a declarator, `new` expression, type constructor
+    * expression or constructor chain initializer) calls, as that constructor's own method is named, if CDT resolves the
+    * call to a constructor declared in this translation unit and not deleted.
+    */
+  protected def calledConstructorFullNameAndSignature(node: IASTNode): Option[(String, String)] = {
+    val implicitNames = node match {
+      case owner: IASTImplicitNameOwner => safeCdtCall(owner.getImplicitNames).toList.flatMap(_.toList)
+      case _                            => Nil
+    }
+    // CDT has no implicit name for the constructor of a base class; the initializer's own name resolves to it.
+    val names = node match {
+      case initializer: ICPPASTConstructorChainInitializer => initializer.getMemberInitializerId :: implicitNames
+      case _                                               => implicitNames
+    }
+    names
+      .flatMap(name => safeGetBinding(name))
+      .collectFirst {
+        case constructor: ICPPConstructor if !constructor.isExternC && !constructor.isDeleted => constructor
+      }
+      .flatMap { constructor =>
+        declaredSignature(constructor).map(sig => (constructorFullName(constructor, sig), sig))
+      }
+  }
+
+  private def constructorFullName(constructor: ICPPConstructor, signature: String): String = {
+    val fullNameNoSig = replaceQualifiedNameSeparator(replaceOperator(constructor.getQualifiedName.mkString(".")))
+    s"${stripTemplateTags(fullNameNoSig)}:$signature"
+  }
+
+  /** The signature in the full name of the method that `declarator` declares for `function`. */
+  private def functionSignature(function: ICPPFunction, declarator: IASTFunctionDeclarator): String = {
+    val returnTpe = declarator.getParent match {
+      case definition: ICPPASTFunctionDefinition if !bindsToConstructor(definition) => returnType(definition)
+      case _ => safeCdtCall(safeGetType(function.getType.getReturnType)).getOrElse(Defines.Any)
+    }
+    signature(cleanType(returnTpe), declarator)
+  }
+
+  /** The declarator whose method a call to `function` links to: the definition's if CDT has seen it, else the first
+    * declaration's. As for the method itself, this is the outermost declarator, and conversion functions are left out.
+    */
+  private def declaringDeclarator(function: ICPPFunction): Option[CPPASTFunctionDeclarator] = {
+    function match {
+      case _: ICPPSpecialization        => None
+      case binding: ICPPInternalBinding =>
+        val candidates =
+          Option(binding.getDefinition).toList ++ Option(binding.getDeclarations).toList.flatMap(_.toList)
+        candidates
+          .collectFirst { case declarator: IASTDeclarator => ASTQueries.findOutermostDeclarator(declarator) }
+          .collect {
+            case declarator: CPPASTFunctionDeclarator if !declarator.getName.isInstanceOf[ICPPASTConversionName] =>
+              declarator
+          }
+      case _ => None
+    }
+  }
+
   private def shortNameForIASTName(node: IASTName): String = {
     node match {
       case c: ICPPASTConversionName =>
@@ -358,14 +431,10 @@ trait FullNameProvider { this: AstCreator =>
             else { s"${stripTemplateTags(fullNameNoSig)}.$tpe:${signature(returnType, declarator)}" }
             Option(fn)
           case Some(constructor: ICPPConstructor) =>
-            val fullNameNoSig = replaceQualifiedNameSeparator(
-              replaceOperator(constructor.getQualifiedName.mkString("."))
-            )
             val fn = if (constructor.isExternC) {
               replaceOperator(constructor.getName)
             } else {
-              val sig = signature(Defines.Void, declarator)
-              s"${stripTemplateTags(fullNameNoSig)}:$sig"
+              constructorFullName(constructor, signature(Defines.Void, declarator))
             }
             Option(fn)
           case Some(function: ICPPFunction) =>
@@ -377,12 +446,7 @@ trait FullNameProvider { this: AstCreator =>
             val fn = if (function.isExternC && !function.isInstanceOf[ICPPMethod]) {
               replaceOperator(function.getName)
             } else {
-              val returnTpe = declarator.getParent match {
-                case definition: ICPPASTFunctionDefinition if !bindsToConstructor(definition) => returnType(definition)
-                case _ => safeCdtCall(safeGetType(function.getType.getReturnType)).getOrElse(Defines.Any)
-              }
-              val sig = signature(cleanType(returnTpe), declarator)
-              s"${stripTemplateTags(fullNameNoSig)}:$sig"
+              s"${stripTemplateTags(fullNameNoSig)}:${functionSignature(function, declarator)}"
             }
             Option(fn)
           case Some(x @ (_: ICPPField | _: CPPVariable)) =>

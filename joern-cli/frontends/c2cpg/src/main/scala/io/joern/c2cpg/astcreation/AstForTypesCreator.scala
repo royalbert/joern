@@ -162,9 +162,11 @@ trait AstForTypesCreator { this: AstCreator =>
     )
     val constructorCallName = tpe.split("\\.").lastOption.getOrElse(tpe)
     val initCode            = code(init).stripPrefix("{").stripSuffix("}").stripPrefix("(").stripSuffix(")")
-    val signature           = s"${Defines.Void}(${initializerSignature(init)})"
-    val fullNameWithSig     = s"$tpe.$constructorCallName:$signature"
-    val leftAst             = astForDeclaratorName(declarator)
+    lazy val (fullNameWithSig, signature) = calledConstructorFullNameAndSignature(declarator).getOrElse {
+      val signature = s"${Defines.Void}(${initializerSignature(init)})"
+      (s"$tpe.$constructorCallName:$signature", signature)
+    }
+    val leftAst = astForDeclaratorName(declarator)
 
     init match {
       case i: IASTEqualsInitializer =>
@@ -208,9 +210,10 @@ trait AstForTypesCreator { this: AstCreator =>
 
     val name = ASTStringUtil.getSimpleName(declarator.getName)
     val tpe  = registerType(scope.lookupVariable(name).map(_._2.takeWhile(isValidFullNameChar)).getOrElse(Defines.Any))
-    val constructorCallName = tpe.split("\\.").lastOption.getOrElse(tpe)
-    val signature           = s"${Defines.Void}()"
-    val fullNameWithSig     = s"$tpe.$constructorCallName:$signature"
+    val constructorCallName          = tpe.split("\\.").lastOption.getOrElse(tpe)
+    val (fullNameWithSig, signature) = calledConstructorFullNameAndSignature(declarator).getOrElse {
+      (s"$tpe.$constructorCallName:${Defines.Void}()", s"${Defines.Void}()")
+    }
     val constructorCallCode = s"$tpe.$constructorCallName()"
     val rightAst            =
       constructorInvocationBlockAst(declarator, tpe, fullNameWithSig, signature, constructorCallCode, List.empty)

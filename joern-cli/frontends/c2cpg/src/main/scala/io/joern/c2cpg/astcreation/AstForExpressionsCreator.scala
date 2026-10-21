@@ -209,7 +209,7 @@ trait AstForExpressionsCreator { this: AstCreator =>
               function match {
                 case functionInstance: ICPPFunctionInstance =>
                   functionInstanceToSignature(functionInstance, functionType)
-                case _ => functionTypeToSignature(functionType)
+                case _ => declaredSignature(function).getOrElse(functionTypeToSignature(functionType))
               }
             }
             val fullName = if (function.isExternC) {
@@ -241,7 +241,7 @@ trait AstForExpressionsCreator { this: AstCreator =>
             // TODO This wont do if the name is a reference.
             val name =
               stripTemplateTags(replaceOperator(StringUtils.normalizeSpace(fieldRefExpr.getFieldName.toString)))
-            val signature     = s"${functionTypeToSignature(functionType)}$constFlag"
+            val signature = declaredSignature(method).getOrElse(s"${functionTypeToSignature(functionType)}$constFlag")
             val classFullName = safeGetType(fieldRefExpr.getFieldOwnerType)
             val fullName      = s"$classFullName.$name:$signature"
 
@@ -295,7 +295,8 @@ trait AstForExpressionsCreator { this: AstCreator =>
             val operatorName = safeCdtCall(evaluation.getOverload)
               .map(overload => stripTemplateTags(replaceOperator(StringUtils.normalizeSpace(overload.getName))))
               .getOrElse(name)
-            val fullName     = s"$classFullName.$operatorName:$functionSignature"
+            val signature = safeCdtCall(evaluation.getOverload).flatMap(declaredSignature).getOrElse(functionSignature)
+            val fullName  = s"$classFullName.$operatorName:$signature"
             val dispatchType = safeCdtCall(evaluation.getOverload) match {
               case Some(method: ICPPMethod) =>
                 if (method.isVirtual || method.isPureVirtual) {
@@ -312,7 +313,7 @@ trait AstForExpressionsCreator { this: AstCreator =>
               operatorName,
               fullName,
               dispatchType,
-              Some(functionSignature),
+              Some(signature),
               Some(registerType(safeGetExpressionType(call)))
             )
             val instanceAst = astForExpression(functionNameExpr)
@@ -617,10 +618,12 @@ trait AstForExpressionsCreator { this: AstCreator =>
         val args = astsForConstructorInitializer(newExpression.getInitializer) ++ arrayModArgs
         callAst(allocCallNode, idAst +: args)
       } else {
-        val constructorCallName = shortName(typeId.getDeclSpecifier)
-        val typeFullName        = fullName(typeId.getDeclSpecifier)
-        val signature           = s"${Defines.Void}(${initializerSignature(newExpression)})"
-        val fullNameWithSig     = s"$typeFullName.$constructorCallName:$signature"
+        val constructorCallName          = shortName(typeId.getDeclSpecifier)
+        val typeFullName                 = fullName(typeId.getDeclSpecifier)
+        val (fullNameWithSig, signature) = calledConstructorFullNameAndSignature(newExpression).getOrElse {
+          val signature = s"${Defines.Void}(${initializerSignature(newExpression)})"
+          (s"$typeFullName.$constructorCallName:$signature", signature)
+        }
         val constructorCallCode = code(newExpression)
         val args                = astsForConstructorInitializer(newExpression.getInitializer)
         constructorInvocationBlockAst(
@@ -705,11 +708,13 @@ trait AstForExpressionsCreator { this: AstCreator =>
         scope.popScope()
         blockAst(node, calls.toList)
       case _ =>
-        val typeId              = constructorExpression.getDeclSpecifier
-        val constructorCallName = shortName(typeId)
-        val typeFullName        = typeForDeclSpecifier(typeId)
-        val signature           = s"${Defines.Void}(${initializerSignature(constructorExpression)})"
-        val fullNameWithSig     = s"$typeFullName.$constructorCallName:$signature"
+        val typeId                       = constructorExpression.getDeclSpecifier
+        val constructorCallName          = shortName(typeId)
+        val typeFullName                 = typeForDeclSpecifier(typeId)
+        val (fullNameWithSig, signature) = calledConstructorFullNameAndSignature(constructorExpression).getOrElse {
+          val signature = s"${Defines.Void}(${initializerSignature(constructorExpression)})"
+          (s"$typeFullName.$constructorCallName:$signature", signature)
+        }
         val constructorCallCode = code(constructorExpression)
         val args                = astsForConstructorInitializer(constructorExpression.getInitializer)
         constructorInvocationBlockAst(

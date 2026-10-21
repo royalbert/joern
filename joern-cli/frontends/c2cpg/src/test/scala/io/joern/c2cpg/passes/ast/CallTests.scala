@@ -433,8 +433,9 @@ class CallTests extends C2CpgSuite {
 
       val calls = cpg.call.nameExact("()").l
       calls.size shouldBe 4
-      calls.map(_.methodFullName).distinct shouldBe List("Cmp.():bool(int,int)")
-      calls.map(_.signature).distinct shouldBe List("bool(int,int)")
+      calls.map(_.methodFullName).distinct shouldBe List("Cmp.():bool(int,int)<const>")
+      calls.map(_.signature).distinct shouldBe List("bool(int,int)<const>")
+      calls.flatMap(_.callee.isExternal.l).distinct shouldBe List(false)
       calls.map(_.dispatchType).distinct shouldBe List(DispatchTypes.STATIC_DISPATCH)
       calls.map(_.typeFullName).distinct shouldBe List("bool")
 
@@ -817,5 +818,218 @@ class CallTests extends C2CpgSuite {
       method.callIn.l shouldBe List(call)
     }
 
+  }
+
+  "Calls to C++ functions whose parameter types are typedefs" should {
+
+    "link to the function's definition" in {
+      val cpg = code(
+        """
+          |typedef unsigned short u16;
+          |typedef struct s { int x; } S;
+          |namespace std { typedef unsigned long size_t; }
+          |int plain(u16 a) { return a; }
+          |int sized(std::size_t n) { return (int)n; }
+          |int pointer(S *p) { return p->x; }
+          |int main() {
+          |  S v;
+          |  return plain(1) + sized(2) + pointer(&v);
+          |}
+          |""".stripMargin,
+        "test.cpp"
+      )
+      List("plain" -> "plain:int(u16)", "sized" -> "sized:int(std.size_t)", "pointer" -> "pointer:int(S*)").foreach {
+        case (name, fullName) =>
+          withClue(name) {
+            cpg.method.nameExact(name).fullName.l shouldBe List(fullName)
+            inside(cpg.call.nameExact(name).l) { case List(call) =>
+              call.methodFullName shouldBe fullName
+              call.signature shouldBe fullName.substring(fullName.indexOf(':') + 1)
+              call.callee.isExternal.l shouldBe List(false)
+            }
+          }
+      }
+    }
+
+    "link to the definition of a function in a namespace" in {
+      val cpg = code(
+        """
+          |namespace n {
+          |  typedef int T;
+          |  int declaredInside(T v);
+          |  int definedInside(T v) { return v; }
+          |}
+          |int n::declaredInside(T v) { return v; }
+          |int main() { return n::declaredInside(1) + n::definedInside(2); }
+          |""".stripMargin,
+        "test.cpp"
+      )
+      List("declaredInside" -> "n.declaredInside:int(n.T)", "definedInside" -> "n.definedInside:int(n.T)").foreach {
+        case (name, fullName) =>
+          withClue(name) {
+            cpg.method.nameExact(name).fullName.l shouldBe List(fullName)
+            cpg.call.nameExact(name).methodFullName.l shouldBe List(fullName)
+            cpg.call.nameExact(name).callee.isExternal.l shouldBe List(false)
+          }
+      }
+    }
+
+    "link to the definition of a method" in {
+      val cpg = code(
+        """
+          |typedef unsigned short u16;
+          |struct Box {
+          |  int value;
+          |  int set(u16 v) { value = v; return value; }
+          |  int get(u16 v);
+          |  int twice(u16 v) { return set(v) + set(v); }
+          |  static int make(u16 v) { return v; }
+          |  int operator()(u16 v) { return v; }
+          |};
+          |int Box::get(u16 v) { return value + v; }
+          |int main() {
+          |  Box b;
+          |  return b.set(1) + b.get(2) + b.twice(3) + Box::make(4) + b(5);
+          |}
+          |""".stripMargin,
+        "test.cpp"
+      )
+      List(
+        "set"   -> ("Box.set:int(u16)", 3),
+        "get"   -> ("Box.get:int(u16)", 1),
+        "twice" -> ("Box.twice:int(u16)", 1),
+        "make"  -> ("Box.make:int(u16)", 1),
+        "()"    -> ("Box.():int(u16)", 1)
+      ).foreach { case (name, (fullName, callCount)) =>
+        withClue(name) {
+          cpg.method.nameExact(name).fullName.l shouldBe List(fullName)
+          cpg.call.nameExact(name).methodFullName.l shouldBe List.fill(callCount)(fullName)
+          cpg.call.nameExact(name).callee.isExternal.l shouldBe List.fill(callCount)(false)
+        }
+      }
+    }
+
+    "link to the definition when the function is declared in a header and defined in another file" in {
+      val cpg = code(
+        """
+          |typedef unsigned int u32;
+          |int api(u32 v);
+          |""".stripMargin,
+        "api.h"
+      ).moreCode(
+        """
+          |#include "api.h"
+          |int api(u32 v) { return v; }
+          |""".stripMargin,
+        "api.cpp"
+      ).moreCode(
+        """
+          |#include "api.h"
+          |int main() { return api(1); }
+          |""".stripMargin,
+        "main.cpp"
+      )
+      cpg.method.nameExact("api").fullName.l shouldBe List("api:int(u32)")
+      inside(cpg.call.nameExact("api").l) { case List(call) =>
+        call.methodFullName shouldBe "api:int(u32)"
+        call.callee.filename.l shouldBe List("api.cpp")
+      }
+    }
+  }
+
+  "Calls to C++ constructors whose parameter types are typedefs" should {
+    val cpg = code(
+      """
+        |typedef int (*Callback)(int);
+        |struct Interpreter {
+        |  Callback cb;
+        |  Interpreter(Callback aCallback) : cb(aCallback) {}
+        |};
+        |namespace ns {
+        |  struct Base {
+        |    Base(Callback c) {}
+        |  };
+        |}
+        |struct Derived : ns::Base {
+        |  Derived(Callback c) : ns::Base(c) {}
+        |};
+        |struct Lazy {
+        |  Lazy(Callback c = 0) {}
+        |};
+        |struct Member {
+        |  Member() = delete;
+        |  Member(Callback c) {}
+        |};
+        |struct Holder {
+        |  Member member;
+        |  Holder(Callback c) : member(c) {}
+        |};
+        |typedef Interpreter Interp;
+        |int id(int x) { return x; }
+        |void use() {
+        |  Callback c = id;
+        |  Interpreter direct(c);
+        |  Interpreter braced{c};
+        |  Interpreter *allocated = new Interpreter(c);
+        |  Interpreter temporary = Interpreter{c};
+        |  Interp aliased(c);
+        |  Derived derived(c);
+        |  Lazy defaulted;
+        |}
+        |""".stripMargin,
+      "test.cpp"
+    )
+
+    "link to the constructor" in {
+      List(
+        "Interpreter.Interpreter(c)" -> ("Interpreter.Interpreter:void(Callback)", 2),
+        "new Interpreter(c)"         -> ("Interpreter.Interpreter:void(Callback)", 1),
+        "Interpreter{c}"             -> ("Interpreter.Interpreter:void(Callback)", 1),
+        "Interp.Interp(c)"           -> ("Interpreter.Interpreter:void(Callback)", 1),
+        "Derived.Derived(c)"         -> ("Derived.Derived:void(Callback)", 1),
+        "ns::Base(c)"                -> ("ns.Base.Base:void(Callback)", 1),
+        "Lazy.Lazy()"                -> ("Lazy.Lazy:void(Callback)", 1)
+      ).foreach { case (callCode, (fullName, callCount)) =>
+        withClue(callCode) {
+          cpg.method.fullNameExact(fullName).isExternal.l shouldBe List(false)
+          val calls = cpg.call.codeExact(callCode).nameNot(Operators.assignment, Defines.OperatorNew).l
+          calls.map(_.methodFullName) shouldBe List.fill(callCount)(fullName)
+          calls.map(_.signature) shouldBe List.fill(callCount)("void(Callback)")
+          calls.flatMap(_.callee.isExternal.l) shouldBe List.fill(callCount)(false)
+        }
+      }
+    }
+
+    "not name a call after a deleted constructor" in {
+      cpg.call.methodFullNameExact("Member.Member:void()").l shouldBe empty
+    }
+  }
+
+  "Calls to C++ functions whose declarations spell a parameter type differently from the function's type" should {
+    val cpg = code(
+      """
+        |int none(void) { return 1; }
+        |int volatileValue(volatile int v) { return v; }
+        |int array(int a[4]) { return a[0]; }
+        |int main() {
+        |  int arr[4] = {0};
+        |  return none() + volatileValue(1) + array(arr);
+        |}
+        |""".stripMargin,
+      "test.cpp"
+    )
+
+    "link to the function's definition" in {
+      List("none", "volatileValue", "array").foreach { name =>
+        withClue(name) {
+          inside(cpg.method.nameExact(name).l) { case List(method) =>
+            inside(cpg.call.nameExact(name).l) { case List(call) =>
+              call.methodFullName shouldBe method.fullName
+              call.callee.l shouldBe List(method)
+            }
+          }
+        }
+      }
+    }
   }
 }
