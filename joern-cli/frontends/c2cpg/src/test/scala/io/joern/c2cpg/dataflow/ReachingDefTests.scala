@@ -7,7 +7,7 @@ import io.joern.dataflowengineoss.passes.reachingdef.{
   ReachingDefProblem,
   ReachingDefTransferFunction
 }
-import io.shiftleft.codepropertygraph.generated.nodes.Identifier
+import io.shiftleft.codepropertygraph.generated.nodes.{Call, Identifier}
 import io.shiftleft.semanticcpg.language.*
 
 class ReachingDefTests extends DataFlowCodeToCpgSuite {
@@ -149,6 +149,48 @@ class ReachingDefTests extends DataFlowCodeToCpgSuite {
       val entries = lists.argument.isCall.nameExact("<operator>.assignment").l
       lists.map(gen(_).size) shouldBe List(1, 1, 1, 1)
       entries.map(gen(_).size) shouldBe List(1, 1, 1, 1, 1, 1)
+    }
+
+    "still carry an entry's value to a use of the object" in {
+      val source = cpg.literal.code("6")
+      val sink   = cpg.call("sink").argument
+      sink.reachableByFlows(source).l should not be empty
+    }
+  }
+
+  "A designated initializer table" should {
+    val cpg = code("""
+      |struct cfg { int len; int max; };
+      |void sink(int);
+      |int foo() {
+      | struct cfg t[2] = { [0] = { .len = 1, .max = 2 }, [1] = { .len = 3 } };
+      | struct cfg c = { .len = 5, .max = 6 };
+      | sink(c.max);
+      |}
+      |""".stripMargin)
+
+    "count each designated entry as one definition, as a positional one" in {
+      val fooMethod = cpg.method("foo").head
+      val gen     = ReachingDefProblem.create(fooMethod).transferFunction.asInstanceOf[ReachingDefTransferFunction].gen
+      val entries = fooMethod.ast.isCall
+        .nameExact("<operator>.assignment")
+        .filter(assignment =>
+          assignment.astParent.isBlock && (assignment.astParent.astParent match {
+            case list: Call => list.name == "<operator>.arrayInitializer"
+            case _          => false
+          })
+        )
+        .l
+      entries.map(_.code).sorted shouldBe List(
+        ".len = 1",
+        ".len = 3",
+        ".len = 5",
+        ".max = 2",
+        ".max = 6",
+        "[0] = { .len = 1, .max = 2 }",
+        "[1] = { .len = 3 }"
+      )
+      entries.map(gen(_).size) shouldBe List.fill(7)(1)
     }
 
     "still carry an entry's value to a use of the object" in {
