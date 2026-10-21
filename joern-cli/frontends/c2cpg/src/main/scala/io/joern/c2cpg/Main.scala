@@ -5,7 +5,7 @@ import io.joern.x2cpg.{SourceFiles, X2CpgConfig, X2CpgMain}
 import scopt.OParser
 
 final case class Config(
-  includePaths: Set[String] = Set.empty,
+  includePaths: Seq[String] = Seq.empty,
   defines: Set[String] = Set.empty,
   includeComments: Boolean = false,
   logProblems: Boolean = false,
@@ -20,7 +20,7 @@ final case class Config(
 
   override def withGenericConfig(value: X2CpgConfig.GenericConfig): Config = copy(genericConfig = value)
 
-  def withIncludePaths(includePaths: Set[String]): Config = {
+  def withIncludePaths(includePaths: Seq[String]): Config = {
     this.copy(includePaths = includePaths)
   }
 
@@ -84,7 +84,7 @@ object Frontend {
       opt[String]("include")
         .unbounded()
         .text("header include paths")
-        .action((incl, c) => c.withIncludePaths(c.includePaths + incl)),
+        .action((incl, config) => config.withIncludePaths(config.includePaths :+ incl)),
       opt[Unit]("no-include-auto-discovery")
         .text("disables auto discovery of system header include paths")
         .hidden(),

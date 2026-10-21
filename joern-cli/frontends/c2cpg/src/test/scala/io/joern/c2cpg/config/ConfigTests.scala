@@ -48,9 +48,18 @@ class ConfigTests extends AnyWordSpec with Matchers with Inside {
       config.logProblems shouldBe true
       config.logPreprocessor shouldBe true
       config.printIfDefsOnly shouldBe true
-      config.includePaths shouldBe Set("INCLUDE_PATH")
+      config.includePaths shouldBe Seq("INCLUDE_PATH")
       config.includePathsAutoDiscovery shouldBe true
       config.defines shouldBe Set("DEFINED_NAME")
+    }
+  }
+
+  "c2cpg include paths should keep the order of the command line" in {
+    val includePaths = (1 to 6).map(i => s"INCLUDE_PATH_$i")
+    val args         = "INPUT" +: includePaths.flatMap(path => Seq("--include", path))
+    inside(X2Cpg.parseCommandLine(args.toArray, Main.cmdLineParser, Main.frontend.defaultConfig)) {
+      case Some(config: Config) =>
+        config.includePaths shouldBe includePaths
     }
   }
 }
