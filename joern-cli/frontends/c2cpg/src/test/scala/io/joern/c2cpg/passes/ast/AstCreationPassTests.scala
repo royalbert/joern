@@ -2345,12 +2345,12 @@ class AstCreationPassTests extends AstC2CpgSuite {
         inside(children) { case List(call1, call2, call3) =>
           call1.code shouldBe "[1] = 5"
           call1.name shouldBe Operators.assignment
-          call1.astMinusRoot.code.l shouldBe List("1", "5")
-          call1.argument.code.l shouldBe List("1", "5")
+          call1.astMinusRoot.code.l shouldBe List("a[1]", "a", "1", "5")
+          call1.argument.code.l shouldBe List("a[1]", "5")
           call2.code shouldBe "[2] = 10"
           call2.name shouldBe Operators.assignment
-          call2.astMinusRoot.code.l shouldBe List("2", "10")
-          call2.argument.code.l shouldBe List("2", "10")
+          call2.astMinusRoot.code.l shouldBe List("a[2]", "a", "2", "10")
+          call2.argument.code.l shouldBe List("a[2]", "10")
           call3.code shouldBe "[3 ... 9] = 15"
           call3.name shouldBe Operators.assignment
           val List(desCall) = call3.argument(1).start.collectAll[Call].l
@@ -2385,12 +2385,12 @@ class AstCreationPassTests extends AstC2CpgSuite {
         inside(children) { case List(call1, call2, call3) =>
           call1.code shouldBe "[1] = 5"
           call1.name shouldBe Operators.assignment
-          call1.astMinusRoot.code.l shouldBe List("1", "5")
-          call1.argument.code.l shouldBe List("1", "5")
+          call1.astMinusRoot.code.l shouldBe List("a[1]", "a", "1", "5")
+          call1.argument.code.l shouldBe List("a[1]", "5")
           call2.code shouldBe "[2] = 10"
           call2.name shouldBe Operators.assignment
-          call2.astMinusRoot.code.l shouldBe List("2", "10")
-          call2.argument.code.l shouldBe List("2", "10")
+          call2.astMinusRoot.code.l shouldBe List("a[2]", "a", "2", "10")
+          call2.argument.code.l shouldBe List("a[2]", "10")
           call3.code shouldBe "[3 ... 9] = 15"
           call3.name shouldBe Operators.assignment
           val List(desCall) = call3.argument(1).start.collectAll[Call].l

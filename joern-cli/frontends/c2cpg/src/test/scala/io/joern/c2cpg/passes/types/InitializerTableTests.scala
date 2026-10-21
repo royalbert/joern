@@ -239,6 +239,23 @@ class InitializerTableArrayDesignatorTests extends C2CpgSuite {
   }
 }
 
+class InitializerTableArrayDesignatedListTests extends C2CpgSuite {
+
+  "An entry with an array designator whose value is a list" should {
+    val cpg = code("""
+        |#define SLOT 1
+        |enum { IDX_A, IDX_B, IDX_MAX };
+        |struct ops { int (*read)(int); int (*write)(int); int flags; };
+        |int r(int c) { return c; }
+        |static struct ops arr[IDX_MAX] = { [IDX_B] = { r }, [SLOT - 1] = { .write = r } };
+        |""".stripMargin)
+
+    "assign to the element it designates, not to its index" in {
+      cpg.assignment.code("\\[.*").target.code.l.sorted shouldBe List("arr[IDX_B]", "arr[SLOT - 1]")
+    }
+  }
+}
+
 class InitializerTableNestedPositionTests extends C2CpgSuite {
 
   "A nested table list" should {

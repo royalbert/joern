@@ -371,9 +371,16 @@ trait AstForInitializersCreator { this: AstCreator =>
       last   <- ds.lastOption
       filled <- designatedObject(entry, ds.init)
       slot   <- designatedSlot(filled.tpe, last)
-      field  <- Option(slot).collect { case MemberSlot(member) => member }
-      name   <- fieldDesignatorName(last)
-    } yield fieldAccessAst(filled, field, code(name), code(last), last)
+      target <- slot match {
+        case MemberSlot(field) =>
+          fieldDesignatorName(last).map(name => fieldAccessAst(filled, field, code(name), code(last), last))
+        case element: ElementSlot if !isRangeDesignator(last) => objectAt(filled, element).map(_.ast(last))
+        case _: ElementSlot                                   => None
+      }
+    } yield target
+
+  private def isRangeDesignator(designator: IASTNode): Boolean =
+    designator.isInstanceOf[CASTArrayRangeDesignator] || designator.isInstanceOf[CPPASTArrayRangeDesignator]
 
   protected def astForCPPASTDesignatedInitializer(initializer: ICPPASTDesignatedInitializer): Ast =
     designatedInitializerAst(initializer, initializer.getDesignators.toSeq, initializer.getOperand)
