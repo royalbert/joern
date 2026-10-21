@@ -28,12 +28,11 @@ trait AstForInitializersCreator { this: AstCreator =>
     val initCallNode     =
       callNode(list, code(list), op, op, DispatchTypes.STATIC_DISPATCH, None, Some(Defines.Any))
     val clauses = list.getClauses.slice(0, MAX_INITIALIZERS)
-    val obj     = objectOf(list)
-    val entries = obj.map(filled => slots(list, filled.tpe)).getOrElse(Nil)
+    val entries = objectOf(list).map(placements(list, _)).getOrElse(Nil)
     val args    = clauses.toList.zipWithIndex.map { case (entry, i) =>
-      (obj, entries.lift(i).flatten) match {
-        case (Some(filled), Some(MemberSlot(field))) if field.getName.nonEmpty =>
-          positionalEntryAst(filled, entry, field)
+      entries.lift(i).flatten match {
+        case Some(Placement(target, MemberSlot(field))) if field.getName.nonEmpty =>
+          positionalEntryAst(target, entry, field)
         case _ => astForNode(entry)
       }
     }
@@ -109,6 +108,11 @@ trait AstForInitializersCreator { this: AstCreator =>
     */
   private case class InitializedObject(code: String, tpe: IType, ast: IASTNode => Ast)
 
+  /** Where a positional entry goes: a slot of the object the list fills, or of an object in it that the designators of
+    * an entry before it lead to.
+    */
+  private case class Placement(obj: InitializedObject, slot: Slot)
+
   private def bare(tpe: IType): IType = tpe match {
     case typedef: ITypedef         => bare(typedef.getType)
     case qualified: IQualifierType => bare(qualified.getType)
@@ -147,7 +151,7 @@ trait AstForInitializersCreator { this: AstCreator =>
     }
 
   private val initializedObjects = mutable.HashMap.empty[IASTInitializerList, Option[InitializedObject]]
-  private val entrySlots         = mutable.HashMap.empty[IASTInitializerList, List[Option[Slot]]]
+  private val entryPlacements    = mutable.HashMap.empty[IASTInitializerList, List[Option[Placement]]]
 
   private def objectOfUncached(list: IASTInitializerList): Option[InitializedObject] = list.getParent match {
     case eq: IASTEqualsInitializer =>
@@ -157,9 +161,9 @@ trait AstForInitializersCreator { this: AstCreator =>
       }
     case outer: IASTInitializerList =>
       for {
-        filled <- objectOf(outer)
-        slot   <- slots(outer, filled.tpe).lift(outer.getClauses.indexWhere(_ eq list)).flatten
-        obj    <- objectAt(filled, slot)
+        filled    <- objectOf(outer)
+        placement <- placements(outer, filled).lift(outer.getClauses.indexWhere(_ eq list)).flatten
+        obj       <- objectAt(placement.obj, placement.slot)
       } yield obj
     case parent => designators(parent).flatMap(designatedObject(parent, _))
   }
@@ -241,103 +245,131 @@ trait AstForInitializersCreator { this: AstCreator =>
     case _                      => None
   }
 
-  /** The slot of each entry of `list`, which fills an object of type `tpe`; None for a designated entry and where the
-    * slot is unknown. A positional entry takes the slot at its position (C17 6.7.9p17): the position follows the
-    * entries before it, a designated one moving it to just after the slot it names. Unnamed bit-fields take no part
-    * (p9). An entry without braces for a slot that is itself a struct, union or array starts that slot's own entries
-    * (p20), so from there the position is unknown until a designator names a slot; for an anonymous struct member,
-    * whose members are the object's own, the entries go on with its members. Positional entries of a union, which set
-    * its first member only, are left out.
+  /** Where each entry of `list`, which fills `filled`, goes; None for a designated entry and where it is unknown. A
+    * positional entry takes the slot at its position (C17 6.7.9p17): the position follows the entries before it, a
+    * designated one moving it to just after the slot its designators lead to, in the object they lead to; once that
+    * object is full, the position goes on in the object it is in. Unnamed bit-fields take no part (p9). An entry
+    * without braces for a slot that is itself a struct, union or array starts that slot's own entries (p20), so from
+    * there the position is unknown until a designator names a slot; for an anonymous struct member, whose members are
+    * the object's own, the entries go on with its members. Positional entries of a union, which set its first member
+    * only, are left out.
     */
-  private def slots(list: IASTInitializerList, tpe: IType): List[Option[Slot]] =
-    entrySlots.get(list) match {
+  private def placements(list: IASTInitializerList, filled: InitializedObject): List[Option[Placement]] =
+    entryPlacements.get(list) match {
       case Some(known) => known
-      case None        => val found = slotsUncached(list, tpe); entrySlots.put(list, found); found
+      case None        => val found = placementsUncached(list, filled); entryPlacements.put(list, found); found
     }
 
-  private def slotsUncached(list: IASTInitializerList, tpe: IType): List[Option[Slot]] =
+  private def placementsUncached(list: IASTInitializerList, filled: InitializedObject): List[Option[Placement]] =
     list.getClauses.toList
-      .foldLeft((frameOf(tpe).toList, List.empty[Option[Slot]])) { case ((cursor, acc), entry) =>
-        val (slot, next) = designators(entry) match {
-          // The position after a designator whose slot is unknown is unknown too.
-          case Some(ds) => (None, ds.headOption.map(cursorAfter(tpe, _)).getOrElse(Nil))
+      .foldLeft((frameOf(filled).toList, List.empty[Option[Placement]])) { case ((cursor, acc), entry) =>
+        val (placement, next) = designators(entry) match {
+          case Some(ds) => (None, cursorAfter(filled, ds))
           case None     => place(cursor, entry)
         }
-        (next, slot :: acc)
+        (next, placement :: acc)
       }
       ._2
       .reverse
 
-  /** A position in the elements of an object an initializer list fills: the element at `index` is the next one. A union
-    * takes one element.
+  /** A position in the elements of `obj`, an object an initializer list fills: the element at `index` is the next one.
+    * A union takes one element.
     */
-  private case class Frame(elementAt: Int => Option[Slot], size: Option[Int], index: Int, union: Boolean) {
+  private case class Frame(
+    obj: InitializedObject,
+    elementAt: Int => Option[Slot],
+    size: Option[Int],
+    index: Int,
+    union: Boolean
+  ) {
     def full: Boolean = size.exists(index >= _) || (union && index > 0)
     def next: Frame   = copy(index = index + 1)
   }
 
-  /** The first position in an object of type `tpe`; None where its elements are unknown, and for a C++ `class`, whose
-    * positional entries are left as they are.
+  /** The first position in `obj`; None where its elements are unknown, and for a C++ `class`, whose positional entries
+    * are left as they are.
     */
-  private def frameOf(tpe: IType): Option[Frame] = bare(tpe) match {
+  private def frameOf(obj: InitializedObject): Option[Frame] = bare(obj.tpe) match {
     case composite: ICompositeType if composite.getKey != ICPPClassType.k_class =>
       elementsOf(composite).map(elements =>
-        Frame(elements.lift, Some(elements.size), 0, composite.getKey == ICompositeType.k_union)
+        Frame(obj, elements.lift, Some(elements.size), 0, composite.getKey == ICompositeType.k_union)
       )
     case array: IArrayType =>
-      Some(Frame(i => Some(ElementSlot(i.toString, array.getType, Some(i), None)), None, 0, union = false))
+      val size = safeCdtCall(array.getSize).flatMap(value => Option(value.numberValue())).map(_.intValue)
+      Some(Frame(obj, i => Some(ElementSlot(i.toString, array.getType, Some(i), None)), size, 0, union = false))
     case _ => None
   }
 
-  /** The slot of the positional entry `entry` at `cursor`, the position in the innermost object first, and the position
+  /** Where the positional entry `entry` at `cursor`, the position in the innermost object first, goes, and the position
     * after it; Nil where the position is unknown. An object whose elements are all set gives way to the next element of
     * the object it is in: an anonymous member to the member after it.
     */
   @tailrec
-  private def place(cursor: List[Frame], entry: IASTInitializerClause): (Option[Slot], List[Frame]) = cursor match {
-    case Nil                          => (None, Nil)
-    case frame :: outer if frame.full => place(outer.headOption.map(_.next :: outer.tail).getOrElse(Nil), entry)
-    case frame :: outer               =>
-      frame.elementAt(frame.index) match {
-        case Some(AnonymousSlot(anonymous)) if !frame.union && !entry.isInstanceOf[IASTInitializerList] =>
-          frameOf(anonymous) match {
-            case Some(inner) => place(inner :: cursor, entry)
-            case None        => (None, Nil)
-          }
-        case Some(slot) if startsElidedBraces(entry, slot.tpe) => (None, Nil)
-        case Some(_) if frame.union                            => (None, frame.next :: outer)
-        case Some(slot)                                        => (Some(slot), frame.next :: outer)
-        case None                                              => (None, Nil)
-      }
-  }
-
-  /** The position just after the slot `designator` names in an object of type `tpe`, the position in the innermost
-    * object first; Nil where it is unknown. A range designator (`[0 ... 3]`) ends at its last element; a member of an
-    * anonymous member is followed by the members after it in that anonymous member.
-    */
-  private def cursorAfter(tpe: IType, designator: IASTNode): List[Frame] =
-    (frameOf(tpe), designatedSlot(tpe, designator)) match {
-      case (Some(frame), Some(ElementSlot(_, _, Some(position), _))) => List(frame.copy(index = position + 1))
-      case (Some(frame), Some(MemberSlot(field)))                    => cursorAfterMember(frame, field.getName)
-      case _                                                         => Nil
+  private def place(cursor: List[Frame], entry: IASTInitializerClause): (Option[Placement], List[Frame]) =
+    cursor match {
+      case Nil                          => (None, Nil)
+      case frame :: outer if frame.full => place(outer.headOption.map(_.next :: outer.tail).getOrElse(Nil), entry)
+      case frame :: outer               =>
+        frame.elementAt(frame.index) match {
+          case Some(anonymous: AnonymousSlot) if !frame.union && !entry.isInstanceOf[IASTInitializerList] =>
+            objectAt(frame.obj, anonymous).flatMap(frameOf) match {
+              case Some(inner) => place(inner :: cursor, entry)
+              case None        => (None, Nil)
+            }
+          case Some(slot) if startsElidedBraces(entry, slot.tpe) => (None, Nil)
+          case Some(_) if frame.union                            => (None, frame.next :: outer)
+          case Some(slot) => (Some(Placement(frame.obj, slot)), frame.next :: outer)
+          case None       => (None, Nil)
+        }
     }
 
-  private def cursorAfterMember(frame: Frame, name: String): List[Frame] =
+  /** The position just after the slot that the designators `ds` lead to from `filled`, the position in the innermost
+    * object first; Nil where it is unknown. A range designator (`[0 ... 3]`) ends at its last element, and leads to no
+    * object; a member of an anonymous member is followed by the members after it there.
+    */
+  private def cursorAfter(filled: InitializedObject, ds: Seq[IASTNode]): List[Frame] = {
+    val reached = ds.zipWithIndex.foldLeft(Option((List.empty[Frame], filled))) { case (acc, (designator, i)) =>
+      for {
+        (frames, obj)     <- acc
+        frame             <- frameOf(obj)
+        (path, placement) <- pathTo(frame, designator)
+        next              <-
+          if (i == ds.size - 1) Some(obj)
+          else Option.unless(isRangeDesignator(designator))(placement).flatMap(at => objectAt(at.obj, at.slot))
+      } yield (path ++ frames, next)
+    }
+    reached.map(_._1) match {
+      case Some(frame :: outer) => frame.next :: outer
+      case _                    => Nil
+    }
+  }
+
+  /** The positions from `frame` down to the slot that `designator` names in its object, the innermost first and at that
+    * slot, with where the slot is.
+    */
+  private def pathTo(frame: Frame, designator: IASTNode): Option[(List[Frame], Placement)] =
+    designatedSlot(frame.obj.tpe, designator) match {
+      case Some(element @ ElementSlot(_, _, Some(position), _)) =>
+        Some((List(frame.copy(index = position)), Placement(frame.obj, element)))
+      case Some(MemberSlot(field)) => pathToMember(frame, field.getName)
+      case _                       => None
+    }
+
+  private def pathToMember(frame: Frame, name: String): Option[(List[Frame], Placement)] =
     (0 until frame.size.getOrElse(0)).iterator
-      .map(i =>
+      .flatMap(i =>
         frame.elementAt(i) match {
-          case Some(MemberSlot(field)) if field.getName == name => List(frame.copy(index = i + 1))
-          case Some(AnonymousSlot(anonymous))                   =>
-            frameOf(anonymous)
-              .map(cursorAfterMember(_, name))
-              .filter(_.nonEmpty)
-              .map(_ :+ frame.copy(index = i))
-              .getOrElse(Nil)
-          case _ => Nil
+          case Some(member @ MemberSlot(field)) if field.getName == name =>
+            Some((List(frame.copy(index = i)), Placement(frame.obj, member)))
+          case Some(anonymous: AnonymousSlot) =>
+            objectAt(frame.obj, anonymous)
+              .flatMap(frameOf)
+              .flatMap(pathToMember(_, name))
+              .map { case (path, placement) => (path :+ frame.copy(index = i), placement) }
+          case _ => None
         }
       )
-      .find(_.nonEmpty)
-      .getOrElse(Nil)
+      .nextOption()
 
   /** The elements of a struct or union that an initializer list sets in order: its named members and its anonymous
     * struct and union members, one element each; unnamed bit-fields take no part (C17 6.7.9p9). None where its

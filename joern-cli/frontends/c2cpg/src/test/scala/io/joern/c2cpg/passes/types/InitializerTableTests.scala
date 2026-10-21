@@ -440,3 +440,41 @@ class InitializerTableAnonymousMemberLinkTests extends C2CpgSuite {
     }
   }
 }
+
+class InitializerTableDesignatorChainTests extends C2CpgSuite {
+
+  "Positional entries after a designator chain" should {
+    val cpg = code("""
+        |struct ops { int (*read)(int); int (*write)(int); };
+        |struct dev { int id; struct ops ops[2]; int (*extra)(int); };
+        |static int r(int x) { return x; }
+        |static int w(int x) { return x; }
+        |struct dev chained = { .ops[1].read = r, w, r };
+        |struct dev element = { .ops[0] = { r }, { w }, r };
+        |""".stripMargin)
+
+    /** (object, member, function) for every entry on `line` that sets a member to a function. */
+    def ties(line: Int): List[(String, String, String)] =
+      cpg.assignment
+        .lineNumber(line)
+        .filter(_.code.startsWith("."))
+        .flatMap { assignment =>
+          for {
+            access   <- Iterator(assignment.target).isCall.collectAll[OpNodes.FieldAccess].l
+            member   <- Iterator(access).fieldIdentifier.canonicalName.l
+            function <- Iterator(assignment.source).isMethodRef.methodFullName.l
+          } yield (access.argument(1).code, member, function)
+        }
+        .l
+        .sorted
+
+    "set the members that follow where the designators lead (C17 6.7.9p17)" in {
+      ties(6) shouldBe List(
+        ("chained", "extra", "r"),
+        ("chained.ops[1]", "read", "r"),
+        ("chained.ops[1]", "write", "w")
+      )
+      ties(7) shouldBe List(("element", "extra", "r"), ("element.ops[0]", "read", "r"), ("element.ops[1]", "read", "w"))
+    }
+  }
+}
