@@ -531,3 +531,54 @@ class InitializerTableCppAggregateTests extends C2CpgSuite(FileDefaults.CppExt) 
     }
   }
 }
+
+class InitializerTableCppBraceTests extends C2CpgSuite(FileDefaults.CppExt) {
+
+  "A C++ aggregate initialized by a list without `=`" should {
+    val cpg = code("""
+        |struct ops { int (*read)(int); int (*write)(int); };
+        |class cops { public: int (*read)(int); int (*write)(int); };
+        |struct ctor { ctor(int (*a)(int), int (*b)(int)); int (*read)(int); int (*write)(int); };
+        |int r(int c) { return c; }
+        |int w(int c) { return c; }
+        |ops braced{ r, w };
+        |cops class_braced{ r, w };
+        |ops tables[2]{ { r }, { r, w } };
+        |ctor constructed{ r, w };
+        |void f() { ops local{ r, w }; }
+        |""".stripMargin)
+
+    /** (object, member it reaches) for every entry on `line` that sets a member. */
+    def ties(line: Int): List[(String, String)] =
+      cpg.assignment
+        .lineNumber(line)
+        .filter(_.code.startsWith("."))
+        .flatMap { assignment =>
+          Iterator(assignment.target).isCall.collectAll[OpNodes.FieldAccess].flatMap { access =>
+            access.referencedMember
+              .map(member => access.argument(1).code -> s"${member.typeDecl.fullName}.${member.name}")
+          }
+        }
+        .l
+        .sorted
+
+    "tie its entries to the members they set, as a list with `=` does" in {
+      ties(7) shouldBe List("braced" -> "ops.read", "braced" -> "ops.write")
+      ties(8) shouldBe List("class_braced" -> "cops.read", "class_braced" -> "cops.write")
+      ties(9) shouldBe List("tables[0]" -> "ops.read", "tables[1]" -> "ops.read", "tables[1]" -> "ops.write")
+      ties(11) shouldBe List("local" -> "ops.read", "local" -> "ops.write")
+    }
+
+    "assign the list, calling no constructor" in {
+      cpg.call.nameExact("<operator>.assignment").lineNumber(7).argument(2).isCall.name.l shouldBe List(
+        "<operator>.arrayInitializer"
+      )
+      cpg.method.fullName("ops\\.ops.*").l shouldBe empty
+    }
+
+    "leave a list that calls a constructor as it is" in {
+      ties(10) shouldBe empty
+      cpg.call.lineNumber(10).name.l should contain("ctor")
+    }
+  }
+}

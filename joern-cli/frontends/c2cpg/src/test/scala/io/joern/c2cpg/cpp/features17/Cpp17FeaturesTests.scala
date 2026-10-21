@@ -634,24 +634,25 @@ class Cpp17FeaturesTests extends AstC2CpgSuite(fileSuffix = FileDefaults.CppExt)
           |auto [gA, gB] = gP;
           |""".stripMargin)
       cpg.local.map(loc => (loc.name, loc.typeFullName)).toMap shouldBe Map(
-        "gP"     -> "Pair",
-        "<tmp>0" -> "Pair",
-        "gA"     -> "int",
-        "gB"     -> "int",
+        "gP" -> "Pair",
+        "gA" -> "int",
+        "gB" -> "int",
         // CDT does not deduce the type of the initializer here, just as it does not at block scope
-        "<tmp>1" -> "ANY"
+        "<tmp>0" -> "ANY"
       )
+      // `Pair gP{1, 2}` initializes the aggregate member by member, as `Pair gP = {1, 2}` does.
       cpg.call.code.l should contain theSameElementsAs List(
-        "gP = Pair.Pair(1, 2)",
-        "Pair.Pair(1, 2)",
-        "<tmp>0 = <operator>.alloc",
-        "<operator>.alloc",
-        "&<tmp>0",
-        "<tmp>1 = gP",
-        "gA = <tmp>1.gA",
-        "<tmp>1.gA",
-        "gB = <tmp>1.gB",
-        "<tmp>1.gB"
+        "gP{1, 2}",
+        "{1, 2}",
+        ".a = 1",
+        ".a",
+        ".b = 2",
+        ".b",
+        "<tmp>0 = gP",
+        "gA = <tmp>0.gA",
+        "<tmp>0.gA",
+        "gB = <tmp>0.gB",
+        "<tmp>0.gB"
       )
     }
 

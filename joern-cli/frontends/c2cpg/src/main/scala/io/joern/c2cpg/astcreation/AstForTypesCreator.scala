@@ -185,7 +185,7 @@ trait AstForTypesCreator { this: AstCreator =>
           constructorCallName,
           initCode
         )
-      case i: IASTInitializerList if isFundamentalTypeKeywords(tpe) =>
+      case i: IASTInitializerList if isFundamentalTypeKeywords(tpe) || initializesAggregate(declarator) =>
         astForIASTEqualsInitializer(declarator, leftAst, astForNode(i))
       case i: IASTInitializerList =>
         astForIASTInitializer(

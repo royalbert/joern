@@ -1124,7 +1124,7 @@ class AstCreationPassTests extends AstC2CpgSuite {
       cpg.call.codeExact("typeid(Widget)").name.l shouldBe List(Defines.OperatorTypeOf)
       cpg.call.codeExact("typeid(w)").name.l shouldBe List(Defines.OperatorTypeOf)
       cpg.call.codeExact("typeid(Widget)").argument(1).isTypeRef.size shouldBe 1
-      cpg.method.nameExact("probe").local.name.l.sorted shouldBe List("<tmp>0", "a", "s", "t", "te", "w")
+      cpg.method.nameExact("probe").local.name.l.sorted shouldBe List("a", "s", "t", "te", "w")
     }
 
     "not fabricate a local for a type-id operand that is not a plain identifier" in {

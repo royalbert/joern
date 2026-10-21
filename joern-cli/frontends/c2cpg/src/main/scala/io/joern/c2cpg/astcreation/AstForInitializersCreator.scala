@@ -163,6 +163,7 @@ trait AstForInitializersCreator { this: AstCreator =>
         case declarator: IASTDeclarator => variableObject(ASTQueries.findInnermostDeclarator(declarator).getName)
         case _                          => None
       }
+    case declarator: IASTDeclarator => variableObject(ASTQueries.findInnermostDeclarator(declarator).getName)
     case outer: IASTInitializerList =>
       for {
         filled    <- objectOf(outer)
@@ -171,6 +172,20 @@ trait AstForInitializersCreator { this: AstCreator =>
       } yield obj
     case parent => designators(parent).flatMap(designatedObject(parent, _))
   }
+
+  /** Whether the variable `declarator` declares is an array or a C++ aggregate class, which a list without `=`
+    * initializes as one with `=` does, calling no constructor ([dcl.init.list]).
+    */
+  protected def initializesAggregate(declarator: IASTDeclarator): Boolean =
+    safeGetBinding(ASTQueries.findInnermostDeclarator(declarator).getName).exists {
+      case variable: IVariable =>
+        safeCdtCall(bare(variable.getType)).exists {
+          case _: IArrayType      => true
+          case cls: ICPPClassType => safeCdtCall(TypeTraits.isAggregateClass(cls)).contains(true)
+          case _                  => false
+        }
+      case _ => false
+    }
 
   private def variableObject(name: IASTName): Option[InitializedObject] =
     safeGetBinding(name).collect { case binding: IVariable =>
