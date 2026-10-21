@@ -357,3 +357,56 @@ class InitializerTableTypedefTests extends C2CpgSuite {
     }
   }
 }
+
+class InitializerTableAnonymousMemberTests extends C2CpgSuite {
+
+  "Positional entries of a struct with anonymous members" should {
+    val cpg = code("""
+        |static int r(int x) { return x; }
+        |static int w(int x) { return x; }
+        |struct with_union { int x; union { int (*f)(int); long l; }; int (*g)(int); };
+        |struct with_struct { int x; struct { int a; int b; }; int c; };
+        |struct with_union elided_union = { 1, r, w };
+        |struct with_union braced_union = { 1, { r }, w };
+        |struct with_union after_designator = { .f = r, w };
+        |struct with_struct elided_struct = { 1, 2, 3, 4 };
+        |struct with_struct braced_struct = { 1, { 2, 3 }, 4 };
+        |struct with_struct inside = { .a = 2, 3, 4 };
+        |""".stripMargin)
+
+    /** (entry, member it sets) for every entry on `line` that sets a member. */
+    def ties(line: Int): List[(String, String)] =
+      cpg.assignment
+        .lineNumber(line)
+        .filter(_.code.startsWith("."))
+        .flatMap { assignment =>
+          Iterator(assignment.target).isCall
+            .collectAll[OpNodes.FieldAccess]
+            .fieldIdentifier
+            .canonicalName
+            .map(assignment.code -> _)
+        }
+        .l
+        .sorted
+
+    "count an anonymous union as one member, whether its entry has braces or not" in {
+      ties(6) shouldBe List(".g = w" -> "g", ".x = 1" -> "x")
+      ties(7) shouldBe List(".g = w" -> "g", ".x = 1" -> "x")
+    }
+
+    "continue after the anonymous union whose member a designator names" in {
+      ties(8) shouldBe List(".f = r" -> "f", ".g = w" -> "g")
+    }
+
+    "set the members of an anonymous struct in order, whether its entries have braces or not" in {
+      ties(9) shouldBe List(".a = 2" -> "a", ".b = 3" -> "b", ".c = 4" -> "c", ".x = 1" -> "x")
+      ties(10) shouldBe List(".a = 2" -> "a", ".b = 3" -> "b", ".c = 4" -> "c", ".x = 1" -> "x")
+      ties(11) shouldBe List(".a = 2" -> "a", ".b = 3" -> "b", ".c = 4" -> "c")
+    }
+
+    "set them on the object the list fills" in {
+      cpg.assignment.lineNumber(10).target.isCall.argument(1).code.l.distinct.sorted shouldBe
+        List("braced_struct")
+    }
+  }
+}
