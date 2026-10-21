@@ -60,5 +60,14 @@ class FunctionPointerMemberCppTests extends C2CpgSuite(FileDefaults.CppExt) {
     "be one member, of its class" in {
       cpg.member.nameExact("fp").typeDecl.fullName.l shouldBe List("S")
     }
+
+    "be set by its definition, which declares no variable" in {
+      cpg.local.nameExact("fp") shouldBe empty
+      cpg.assignment.target.isCall
+        .collectAll[OpNodes.FieldAccess]
+        .referencedMember
+        .map(member => s"${member.typeDecl.fullName}.${member.name}")
+        .l shouldBe List("S.fp")
+    }
   }
 }

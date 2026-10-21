@@ -149,12 +149,14 @@ trait AstForTypesCreator { this: AstCreator =>
     * name. It does not declare a new variable, so it must not be lowered through `astForIdentifier` (which `astForNode`
     * would pick for any `IASTName`): that flattens `Foo::bar` to an unqualified `bar` and registers it as a variable
     * reference in the enclosing namespace scope. We lower it as a field access instead, exactly as a *use* of
-    * `Foo::bar` is lowered.
+    * `Foo::bar` is lowered. The name may be in a nested declarator, as the function pointer member's is in
+    * `int (*Foo::fp)(int) = nullptr;`.
     */
-  private def astForDeclaratorName(declarator: IASTDeclarator): Ast = declarator.getName match {
-    case qualifiedName: CPPASTQualifiedName => astForQualifiedName(qualifiedName)
-    case name                               => astForNode(name)
-  }
+  private def astForDeclaratorName(declarator: IASTDeclarator): Ast =
+    ASTQueries.findInnermostDeclarator(declarator).getName match {
+      case qualifiedName: CPPASTQualifiedName => astForQualifiedName(qualifiedName)
+      case _                                  => astForNode(declarator.getName)
+    }
 
   protected def astForInitializer(declarator: IASTDeclarator, init: IASTInitializer): Ast = {
     val name = ASTStringUtil.getSimpleName(declarator.getName)
