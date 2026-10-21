@@ -410,3 +410,33 @@ class InitializerTableAnonymousMemberTests extends C2CpgSuite {
     }
   }
 }
+
+class InitializerTableAnonymousMemberLinkTests extends C2CpgSuite {
+
+  "Members of an anonymous struct or union member" should {
+    val cpg = code("""
+        |static int r(int x) { return x; }
+        |struct dev { int id; union { int (*read)(int); long raw; }; struct { int (*write)(int); int flags; }; };
+        |struct dev positional = { 1, { r }, { r, 2 } };
+        |struct dev designated = { .read = r, .write = r };
+        |int use(struct dev d) { return d.read(1) + d.flags; }
+        |""".stripMargin)
+
+    /** The members the field accesses on `line` reach. */
+    def reached(line: Int): List[String] =
+      cpg.fieldAccess.lineNumber(line).referencedMember.map(member => s"${member.typeDecl.fullName}.${member.name}").l
+
+    "be members of the struct the anonymous member is in" in {
+      cpg.typeDecl.nameExact("dev").member.name.l.sorted shouldBe List("flags", "id", "raw", "read", "write")
+    }
+
+    "be reached by the table entries that set them" in {
+      reached(4).sorted shouldBe List("dev.flags", "dev.id", "dev.write")
+      reached(5).sorted shouldBe List("dev.read", "dev.write")
+    }
+
+    "be reached by an access through the struct" in {
+      reached(6).sorted shouldBe List("dev.flags", "dev.read")
+    }
+  }
+}

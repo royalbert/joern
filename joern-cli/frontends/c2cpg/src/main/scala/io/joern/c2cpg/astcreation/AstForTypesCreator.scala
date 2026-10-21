@@ -8,6 +8,7 @@ import io.shiftleft.codepropertygraph.generated.{DispatchTypes, EdgeTypes, Modif
 import org.apache.commons.lang3.StringUtils
 import org.eclipse.cdt.core.dom.ast.*
 import org.eclipse.cdt.core.dom.ast.cpp.*
+import org.eclipse.cdt.internal.core.dom.parser.ASTQueries
 import org.eclipse.cdt.internal.core.dom.parser.cpp.{
   CPPASTAliasDeclaration,
   CPPASTQualifiedName,
@@ -482,8 +483,9 @@ trait AstForTypesCreator { this: AstCreator =>
     typeRefNodeMaybe.foreach(typeRefIdStack.push)
     scope.pushNewMethodScope(typeDecl.fullName, typeDecl.name, typeDecl, None)
 
-    val memberDecls                = typeSpecifier.getDeclarations(true).toList
-    val memberAsts                 = memberDecls.flatMap(d => astsForDeclaration(d, true))
+    val memberDecls = typeSpecifier.getDeclarations(true).toList
+    val memberAsts  =
+      memberDecls.flatMap(decl => astsForDeclaration(decl, true)) ++ memberDecls.flatMap(anonymousMemberAsts)
     val memberNodesWithInitializer = memberDecls.filter(d => declHasInit(d))
 
     methodAstParentStack.pop()
@@ -502,6 +504,42 @@ trait AstForTypesCreator { this: AstCreator =>
     }
     typeRefNodeMaybe.map(Ast(_)).toSeq
   }
+
+  /** The members of an anonymous struct or union member (`union { int i; float f; };`), and of the anonymous members
+    * nested in it, as members of the struct or union it is in, whose members they are (C17 6.7.2.1p13): `s.i` names
+    * one. They stay members of the anonymous member's own type too.
+    */
+  private def anonymousMemberAsts(decl: IASTDeclaration): Seq[Ast] = decl match {
+    case member: IASTSimpleDeclaration if member.getDeclarators.isEmpty =>
+      member.getDeclSpecifier match {
+        case anonymous: IASTCompositeTypeSpecifier if ASTStringUtil.getSimpleName(anonymous.getName).isEmpty =>
+          anonymous.getDeclarations(true).toSeq.flatMap {
+            case inner: IASTSimpleDeclaration if inner.getDeclarators.nonEmpty =>
+              inner.getDeclarators.toSeq.zipWithIndex.flatMap { case (declarator, index) =>
+                anonymousMemberAst(inner, declarator, index)
+              }
+            case inner => anonymousMemberAsts(inner)
+          }
+        case _ => Seq.empty
+      }
+    case _ => Seq.empty
+  }
+
+  /** A member of an anonymous member, as its own type declares it: a function pointer member as in
+    * `astForFunctionDeclarator`, any other as in `astForDeclarator`.
+    */
+  private def anonymousMemberAst(declaration: IASTSimpleDeclaration, declarator: IASTDeclarator, index: Int) =
+    safeGetBinding(ASTQueries.findInnermostDeclarator(declarator).getName).collect {
+      case field: IField if field.getName.nonEmpty =>
+        declarator match {
+          case function: IASTFunctionDeclarator =>
+            val tpe = safeCdtCall(safeGetType(field.getType)).getOrElse(Defines.Any)
+            Ast(memberNode(function, shortName(function), code(function.getParent), registerType(tpe)))
+          case _ =>
+            val tpe = typeForIASTDeclarator(declaration, declarator, index)
+            Ast(memberNode(declarator, shortName(declarator), code(declarator), tpe))
+        }
+    }
 
   private def astsForElaboratedType(
     typeSpecifier: IASTElaboratedTypeSpecifier,
