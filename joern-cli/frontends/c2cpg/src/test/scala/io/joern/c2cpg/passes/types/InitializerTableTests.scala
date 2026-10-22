@@ -756,3 +756,40 @@ class InitializerTableNoObjectCppTests extends C2CpgSuite(FileDefaults.CppExt) {
     }
   }
 }
+
+class InitializerTableStaticMemberCppTests extends C2CpgSuite(FileDefaults.CppExt) {
+
+  "A list that initializes a static data member defined outside its class" should {
+    val cpg = code("""
+        |struct ExtAddress { unsigned char m8[8]; };
+        |struct Mode { int id; int flags; };
+        |class Mac {
+        |  public:
+        |    static const ExtAddress kExtAddress;
+        |    static const Mode kMode;
+        |};
+        |const ExtAddress Mac::kExtAddress = {{0x35, 0x06, 0xfe, 0xb8, 0x23, 0xd4, 0x87, 0x12}};
+        |const Mode Mac::kMode = {1, 2};
+        |""".stripMargin)
+
+    "declare no variable for the member at file scope" in {
+      cpg.method.nameExact("<global>").local.name.l shouldBe empty
+    }
+
+    "set the members of that member, reached as its definition reaches it" in {
+      cpg.assignment.target.isCall
+        .collectAll[OpNodes.FieldAccess]
+        .filter(_.argument(1).isCall)
+        .flatMap { access =>
+          val base = access.argument(1).code
+          access.referencedMember.map(member => base -> s"${member.typeDecl.fullName}.${member.name}")
+        }
+        .l
+        .sorted shouldBe List(
+        "Mac::kExtAddress" -> "ExtAddress.m8",
+        "Mac::kMode"       -> "Mode.flags",
+        "Mac::kMode"       -> "Mode.id"
+      )
+    }
+  }
+}

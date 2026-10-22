@@ -2,6 +2,7 @@ package io.joern.c2cpg.astcreation
 
 import io.joern.x2cpg.Ast
 import io.shiftleft.codepropertygraph.generated.{DispatchTypes, EvaluationStrategies, Operators}
+import io.shiftleft.codepropertygraph.generated.nodes.NewCall
 import org.eclipse.cdt.core.dom.ast.*
 import org.eclipse.cdt.core.dom.ast.c.{ICASTArrayDesignator, ICASTDesignatedInitializer, ICASTFieldDesignator}
 import org.eclipse.cdt.core.dom.ast.cpp.{
@@ -14,7 +15,7 @@ import org.eclipse.cdt.core.dom.ast.cpp.{
 }
 import org.eclipse.cdt.internal.core.dom.parser.{ASTInternal, ASTQueries}
 import org.eclipse.cdt.internal.core.dom.parser.c.CASTArrayRangeDesignator
-import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPASTArrayRangeDesignator
+import org.eclipse.cdt.internal.core.dom.parser.cpp.{CPPASTArrayRangeDesignator, CPPASTQualifiedName}
 import org.eclipse.cdt.internal.core.dom.parser.cpp.semantics.TypeTraits
 
 import scala.annotation.tailrec
@@ -209,19 +210,43 @@ trait AstForInitializersCreator { this: AstCreator =>
 
   private def variableObject(name: IASTName): Option[InitializedObject] =
     safeGetBinding(name).collect { case binding: IVariable =>
-      // The variable's own name: the code of a name a macro builds, as in `DECLARE_OPS(uart, r)`, is the macro's call.
-      val variable = shortName(name)
-      InitializedObject(
-        variable,
-        binding.getType,
-        at => {
-          val tpe = registerType(declaringTypeName(binding.getType))
-          val id  = identifierNode(at, variable, variable, tpe)
-          scope.addVariableReference(variable, id, tpe, EvaluationStrategies.BY_REFERENCE)
-          Ast(id)
-        }
-      )
+      name match {
+        case qualifiedName: CPPASTQualifiedName => staticMemberObject(qualifiedName, binding)
+        case _                                  =>
+          // The variable's own name: the code of a name a macro builds, as in `DECLARE_OPS(uart, r)`, is the macro's
+          // call.
+          val variable = shortName(name)
+          InitializedObject(
+            variable,
+            binding.getType,
+            at => {
+              val tpe = registerType(declaringTypeName(binding.getType))
+              val id  = identifierNode(at, variable, variable, tpe)
+              scope.addVariableReference(variable, id, tpe, EvaluationStrategies.BY_REFERENCE)
+              Ast(id)
+            }
+          )
+      }
     }
+
+  /** The object that the out-of-class definition of a C++ static data member initializes, as in
+    * `const T S::k = { ... };`: the member `S::k`, reached as the definition's own target reaches it
+    * (`AstForTypesCreator.astForDeclaratorName`), by a field access on its class, typed as the member so that the
+    * entries reach the members of `T`. An identifier `k` would name no variable in scope, and the scope would declare a
+    * local for it.
+    */
+  private def staticMemberObject(name: CPPASTQualifiedName, member: IVariable): InitializedObject =
+    InitializedObject(
+      code(name),
+      member.getType,
+      _ => {
+        val access = astForQualifiedName(name)
+        access.root.collect { case call: NewCall => call }.foreach { call =>
+          call.typeFullName = registerType(declaringTypeName(member.getType))
+        }
+        access
+      }
+    )
 
   /** The member or element of `filled` that `slot` names, or `filled` itself for an anonymous member, whose members are
     * its own; None for an unnamed member.
