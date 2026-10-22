@@ -142,13 +142,13 @@ class ReachingDefTests extends DataFlowCodeToCpgSuite {
       |}
       |""".stripMargin)
 
-    "count each list and each entry it sets as one definition" in {
+    "count each list as one definition, and the entries it sets as none" in {
       val fooMethod = cpg.method("foo").head
       val gen     = ReachingDefProblem.create(fooMethod).transferFunction.asInstanceOf[ReachingDefTransferFunction].gen
       val lists   = fooMethod.ast.isCall.nameExact("<operator>.arrayInitializer").l
       val entries = lists.argument.isCall.nameExact("<operator>.assignment").l
       lists.map(gen(_).size) shouldBe List(1, 1, 1, 1)
-      entries.map(gen(_).size) shouldBe List(1, 1, 1, 1, 1, 1)
+      entries.map(gen(_).size) shouldBe List(0, 0, 0, 0, 0, 0)
     }
 
     "still carry an entry's value to a use of the object" in {
@@ -169,7 +169,7 @@ class ReachingDefTests extends DataFlowCodeToCpgSuite {
       |}
       |""".stripMargin)
 
-    "count each designated entry as one definition, as a positional one" in {
+    "count no definition for a designated entry, as for a positional one" in {
       val fooMethod = cpg.method("foo").head
       val gen     = ReachingDefProblem.create(fooMethod).transferFunction.asInstanceOf[ReachingDefTransferFunction].gen
       val entries = fooMethod.ast.isCall
@@ -190,13 +190,31 @@ class ReachingDefTests extends DataFlowCodeToCpgSuite {
         "[0] = { .len = 1, .max = 2 }",
         "[1] = { .len = 3 }"
       )
-      entries.map(gen(_).size) shouldBe List.fill(7)(1)
+      entries.map(gen(_).size) shouldBe List.fill(7)(0)
     }
 
     "still carry an entry's value to a use of the object" in {
       val source = cpg.literal.code("6")
       val sink   = cpg.call("sink").argument
       sink.reachableByFlows(source).l should not be empty
+    }
+  }
+
+  "A positional table of a struct with several members" should {
+    val entries = (0 until 800).map(i => s"{ $i, $i, $i, $i }").mkString(", ")
+    val cpg     = code(s"""
+      |struct reg { int addr; int value; int mask; int delay; };
+      |int source(void);
+      |void sink(int);
+      |void init(void) {
+      | int a = source();
+      | struct reg seq[800] = { $entries };
+      | sink(a);
+      |}
+      |""".stripMargin)
+
+    "keep the flows of the function that holds it" in {
+      cpg.call("sink").argument.reachableByFlows(cpg.call("source")).l should not be empty
     }
   }
 

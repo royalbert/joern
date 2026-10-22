@@ -182,13 +182,13 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
     // taint unharmed.
 
     val defsForCalls = method.call
-      .filterNot(x => isFieldAccess(x.name))
+      .filterNot(call => isFieldAccess(call.name) || isInitializerEntry(call))
       .l
       .map { call =>
         call -> {
           val retVal = List(call)
           val args   =
-            if (call.name == Operators.arrayInitializer || isInitializerEntry(call)) Nil
+            if (call.name == Operators.arrayInitializer) Nil
             else call.argument.filter(hasValidGenType).l
           mutable.BitSet(
             (retVal ++ args)
@@ -203,12 +203,14 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
   }
 
   /** An initializer list defines the value it builds and nothing else: it does not write to its entries. An entry that
-    * the list holds as an assignment to the member it sets (`r` in `{ r }`, written `.read = r`) likewise defines only
-    * itself, the part of the object the list fills; the member it names is not a variable that later code reads. A
-    * designated entry (`{ .read = r }`) is such an assignment inside a block the list holds. An assignment to a
-    * variable that the code writes as an entry (`{ x = f() }`) is no such entry: it defines its variable.
+    * the list holds as an assignment to the member it sets (`r` in `{ r }`, written `.read = r`) defines nothing: the
+    * member it names is not a variable that later code reads, as the object is read through its variable. Its value
+    * reaches the list through the edges that `DdgGenerator` adds from the entry's arguments to the entry, and a table's
+    * entries do not count toward the definitions of the method that holds it. A designated entry is such an assignment
+    * inside a block the list holds (`{ .read = r }`). An assignment to a variable is no entry, even where the code
+    * writes it in a list (`{ x = f() }`): it defines its variable.
     */
-  private def isInitializerEntry(node: Expression): Boolean = node match {
+  private[reachingdef] def isInitializerEntry(node: Expression): Boolean = node match {
     case call: Call
         if call.name == Operators.assignment && !call.argumentOption(1).exists(_.isInstanceOf[Identifier]) =>
       call.astParent match {

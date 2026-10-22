@@ -37,7 +37,8 @@ class DdgGenerator(semantics: Semantics) {
 
     val numberToNode = problem.flowGraph.asInstanceOf[ReachingDefFlowGraph].numberToNode
     val in           = solution.in
-    val gen          = solution.problem.transferFunction.asInstanceOf[ReachingDefTransferFunction].gen
+    val transfer     = solution.problem.transferFunction.asInstanceOf[ReachingDefTransferFunction]
+    val gen          = transfer.gen
 
     val allNodes      = in.keys.toList
     val usageAnalyzer = new UsageAnalyzer(problem, in)
@@ -101,6 +102,14 @@ class DdgGenerator(semantics: Semantics) {
           if (use != genNode && isDdgNode(use)) {
             addEdge(use, genNode, nodeToEdgeLabel(use))
           }
+        }
+      }
+
+      // An initializer entry defines nothing (see `ReachingDefTransferFunction.isInitializerEntry`): its arguments
+      // reach it through these edges instead.
+      if (transfer.isInitializerEntry(call)) {
+        call.argument.filter(isDdgNode).foreach { use =>
+          addEdge(use, call, nodeToEdgeLabel(use))
         }
       }
 
