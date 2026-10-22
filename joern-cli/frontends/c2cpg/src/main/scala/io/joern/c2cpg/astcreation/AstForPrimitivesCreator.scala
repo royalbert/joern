@@ -96,7 +96,9 @@ trait AstForPrimitivesCreator { this: AstCreator =>
   }
 
   /** Enum constant references are lowered as field accesses on the enclosing enum type, mirroring how qualified
-    * accesses (`X::a`) are represented. The post-frontend `FieldAccessLinkerPass` links the access to the member.
+    * accesses (`X::a`) are represented. The access is linked to the enumerator's member here, by binding: the enum's
+    * fullName may be renamed later (anonymous enums of different files share one), so a link by name could reach
+    * another file's enum.
     */
   private def maybeAstForEnumMemberAccess(ident: IASTNode, identifierName: String): Option[Ast] = {
     val binding = ident match {
@@ -110,7 +112,7 @@ trait AstForPrimitivesCreator { this: AstCreator =>
       val field  = fieldIdentifierNode(ident, identifierName, identifierName)
       val access =
         callNode(ident, code(ident), op, op, DispatchTypes.STATIC_DISPATCH, None, Some(enumMember.member.typeFullName))
-      callAst(access, List(Ast(base), Ast(field)))
+      callAst(access, List(Ast(base), Ast(field))).withRefEdge(access, enumMember.member)
     }
   }
 

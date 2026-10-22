@@ -80,6 +80,28 @@ class EnumReferenceTests extends C2CpgSuite {
         cpg.method.nameExact("value").ast.isReturn.ast.isCall.nameExact(Operators.fieldAccess).referencedMember.l
       returnAccess shouldBe List(outer)
     }
+
+    "reach their own file's enumerator when anonymous enums of two files share a name" in {
+      val cpg = code(
+        """
+          |enum { FIRST = 1 };
+          |int one(void) { return FIRST; }
+          |""".stripMargin,
+        "one.c"
+      ).moreCode(
+        """
+          |enum { SECOND = 2 };
+          |int two(void) { return SECOND; }
+          |""".stripMargin,
+        "two.c"
+      )
+      val first  = cpg.member.nameExact("FIRST").l
+      val second = cpg.member.nameExact("SECOND").l
+      first.size shouldBe 1
+      second.size shouldBe 1
+      cpg.method.nameExact("one").ast.isCall.nameExact(Operators.fieldAccess).referencedMember.l shouldBe first
+      cpg.method.nameExact("two").ast.isCall.nameExact(Operators.fieldAccess).referencedMember.l shouldBe second
+    }
   }
 }
 
