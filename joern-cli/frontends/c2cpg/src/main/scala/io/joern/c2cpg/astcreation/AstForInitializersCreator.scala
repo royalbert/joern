@@ -81,8 +81,12 @@ trait AstForInitializersCreator { this: AstCreator =>
       callAst(callNode_, List(left, astForNode(operand)))
     }
     def designatorAst(designator: IASTNode): Ast = fieldDesignatorName(designator) match {
-      case Some(name) => Ast(fieldIdentifierNode(designator, code(name), code(name)))
-      case None       => astForNode(designator)
+      case Some(name) =>
+        // The member's own name: the code of a designator a macro writes, as in `#define ONE(d) { .read = d }`, is
+        // the macro's call.
+        val member = shortName(name)
+        Ast(fieldIdentifierNode(designator, member, member))
+      case None => astForNode(designator)
     }
     val calls = designatedTarget(initializer, ds) match {
       case Some(target) => List(assignment(target, 1))
@@ -553,8 +557,9 @@ trait AstForInitializersCreator { this: AstCreator =>
   /** The target of a designated entry: the slot its designators lead to from the object its list fills. A last field
     * designator (`.read` in `uart = { .read = r }`) is a field access on the object the others lead to, `uart.read`,
     * written `.read`, so that the member linker connects the entry to the member it sets, as it does for `x->read = r`.
-    * An array designator (`[1]`) leads to the element, `uart[1]`. None where the designators lead to no known member,
-    * and for a range of elements (`[0 ... 3]`).
+    * The access names the member by the designator's identifier, also where a macro writes the designator, whose code
+    * is the macro's call. An array designator (`[1]`) leads to the element, `uart[1]`. None where the designators lead
+    * to no known member, and for a range of elements (`[0 ... 3]`).
     */
   private def designatedTarget(entry: IASTNode, ds: Seq[IASTNode]): Option[Ast] =
     for {
@@ -563,7 +568,10 @@ trait AstForInitializersCreator { this: AstCreator =>
       slot   <- designatedSlot(filled.tpe, last)
       target <- slot match {
         case MemberSlot(field) =>
-          fieldDesignatorName(last).map(name => fieldAccessAst(filled, field, code(name), code(last), last))
+          fieldDesignatorName(last).map { name =>
+            val member = shortName(name)
+            fieldAccessAst(filled, field, member, s".$member", last)
+          }
         case element: ElementSlot if !isRangeDesignator(last) => objectAt(filled, element).map(_.ast(last))
         case _: ElementSlot | _: AnonymousSlot | _: BaseSlot  => None
       }

@@ -282,6 +282,63 @@ class InitializerTableMacroNamedTests extends C2CpgSuite {
   }
 }
 
+class InitializerTableMacroDesignatorTests extends C2CpgSuite {
+
+  "Designated entries that a macro writes" should {
+    val cpg = code("""
+        |struct str { const char *value; int len; };
+        |struct kv { struct str key; int (*decoder)(int); void *value_ptr; };
+        |struct status { int value; };
+        |int dec(int);
+        |int x;
+        |#define KV(k, d, vp) { { .value = k, .len = sizeof(k) - 1 }, .decoder = d, .value_ptr = vp }
+        |#define ONE(d) { .decoder = d }
+        |#define OK ((struct status){ .value = 1 })
+        |struct kv table[] = { KV("image", dec, &x) };
+        |struct kv two = ONE(dec);
+        |struct status st = OK;
+        |""".stripMargin)
+
+    "name the member each sets, not the macro's call" in {
+      cpg.assignment.target.isCall
+        .collectAll[OpNodes.FieldAccess]
+        .fieldIdentifier
+        .canonicalName
+        .l
+        .distinct
+        .sorted shouldBe List("decoder", "key", "len", "value", "value_ptr")
+    }
+
+    "link to the member each sets" in {
+      cpg.assignment.target.isCall
+        .collectAll[OpNodes.FieldAccess]
+        .referencedMember
+        .map(member => s"${member.typeDecl.fullName}.${member.name}")
+        .l
+        .sorted shouldBe List(
+        "kv.decoder",
+        "kv.decoder",
+        "kv.key",
+        "kv.value_ptr",
+        "status.value",
+        "str.len",
+        "str.value"
+      )
+    }
+  }
+
+  "A designator that a macro writes, in a list whose type is not known" should {
+    val cpg = code("""
+        |#define U(v) { .beta = { .gamma = v } }
+        |static struct undef_t u = U(2);
+        |""".stripMargin)
+
+    "be the field identifier of the member it names" in {
+      cpg.fieldIdentifier.canonicalName.l.sorted shouldBe List("beta", "gamma")
+    }
+  }
+}
+
 class InitializerTableNestedPositionTests extends C2CpgSuite {
 
   "A nested table list" should {
