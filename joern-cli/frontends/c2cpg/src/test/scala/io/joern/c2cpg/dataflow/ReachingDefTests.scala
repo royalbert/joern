@@ -142,12 +142,18 @@ class ReachingDefTests extends DataFlowCodeToCpgSuite {
       |}
       |""".stripMargin)
 
-    "count each list as one definition, and the entries it sets as none" in {
+    "count no definition for the entries a list sets, by the entries or by the list" in {
       val fooMethod = cpg.method("foo").head
       val gen     = ReachingDefProblem.create(fooMethod).transferFunction.asInstanceOf[ReachingDefTransferFunction].gen
       val lists   = fooMethod.ast.isCall.nameExact("<operator>.arrayInitializer").l
       val entries = lists.argument.isCall.nameExact("<operator>.assignment").l
-      lists.map(gen(_).size) shouldBe List(1, 1, 1, 1)
+      // A list defines itself and, as any call does, its arguments: here the two lists of `t`, but none of the entries.
+      lists.map(list => list.code -> gen(list).size) shouldBe List(
+        "{ { 1, 2 }, { 3, 4 } }" -> 3,
+        "{ 1, 2 }"               -> 1,
+        "{ 3, 4 }"               -> 1,
+        "{ 5, 6 }"               -> 1
+      )
       entries.map(gen(_).size) shouldBe List(0, 0, 0, 0, 0, 0)
     }
 

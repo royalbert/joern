@@ -187,9 +187,7 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
       .map { call =>
         call -> {
           val retVal = List(call)
-          val args   =
-            if (call.name == Operators.arrayInitializer) Nil
-            else call.argument.filter(hasValidGenType).l
+          val args   = call.argument.filter(hasValidGenType).filterNot(isInitializerEntry).l
           mutable.BitSet(
             (retVal ++ args)
               .collect {
@@ -202,13 +200,13 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
     (defsForParams ++ defsForCalls).toMap
   }
 
-  /** An initializer list defines the value it builds and nothing else: it does not write to its entries. An entry that
-    * the list holds as an assignment to the member it sets (`r` in `{ r }`, written `.read = r`) defines nothing: the
-    * member it names is not a variable that later code reads, as the object is read through its variable. Its value
-    * reaches the list through the edges that `DdgGenerator` adds from the entry's arguments to the entry, and a table's
-    * entries do not count toward the definitions of the method that holds it. A designated entry is such an assignment
-    * inside a block the list holds (`{ .read = r }`). An assignment to a variable is no entry, even where the code
-    * writes it in a list (`{ x = f() }`): it defines its variable.
+  /** An entry of an initializer list, the assignment the list holds to the member the entry sets (`r` in `{ r }`,
+    * written `.read = r`), defines nothing, and the list, which defines its other arguments as any call does, does not
+    * define it either: the member it names is not a variable that later code reads, as the object is read through its
+    * variable. Its value reaches the list through the edges that `DdgGenerator` adds from the entry's arguments to the
+    * entry, and a table's entries do not count toward the definitions of the method that holds it. A designated entry
+    * is such an assignment inside a block the list holds (`{ .read = r }`). An assignment to a variable is no entry,
+    * even where the code writes it in a list (`{ x = f() }`): it defines its variable.
     */
   private[reachingdef] def isInitializerEntry(node: Expression): Boolean = node match {
     case call: Call
