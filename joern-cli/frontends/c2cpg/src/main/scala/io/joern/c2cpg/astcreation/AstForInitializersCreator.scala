@@ -180,7 +180,7 @@ trait AstForInitializersCreator { this: AstCreator =>
         placement <- placements(outer, filled).lift(outer.getClauses.indexWhere(_ eq list)).flatten
         obj       <- objectAt(placement.obj, placement.slot)
       } yield obj
-    case parent => designators(parent).flatMap(designatedObject(parent, _))
+    case parent => designators(parent).flatMap(designatedObject(parent, _, lowerIndexes = false))
   }
 
   /** The object a compound literal makes, `(struct mux){ .port = 1 }` (C17 6.5.2.5). It has no name, so an expression
@@ -257,16 +257,32 @@ trait AstForInitializersCreator { this: AstCreator =>
     case _ => None
   }
 
-  /** The object a designated entry's designators lead to from the object its list fills (`.o`, `[1]`, `.o.p`). */
-  private def designatedObject(entry: IASTNode, ds: Seq[IASTNode]): Option[InitializedObject] =
+  /** The object a designated entry's designators lead to from the object its list fills (`.o`, `[1]`, `.o.p`). Where
+    * `lowerIndexes`, for the target of the entry the designators belong to, an array designator's index is its
+    * expression; for the entries of the list the entry holds, which refer to the same element, it is a reference to
+    * that index (`referenceTo`).
+    */
+  private def designatedObject(entry: IASTNode, ds: Seq[IASTNode], lowerIndexes: Boolean): Option[InitializedObject] =
     Option(entry.getParent)
       .collect { case list: IASTInitializerList => list }
       .flatMap(objectOf)
       .flatMap(filled =>
         ds.foldLeft(Option(filled))((obj, designator) =>
-          obj.flatMap(current => designatedSlot(current.tpe, designator).flatMap(objectAt(current, _)))
+          obj.flatMap(current =>
+            designatedSlot(current.tpe, designator)
+              .flatMap(slot => objectAt(current, if (lowerIndexes) slot else referenceTo(slot)))
+          )
         )
       )
+
+  /** `slot` as other entries refer to it: an element by the code of its index, a literal, not by the index's
+    * expression, which only the entry whose designator it is lowers. A computed index, such as a macro's casts, masks
+    * and shifts, would otherwise be lowered again for each entry that sets a member of the element.
+    */
+  private def referenceTo(slot: Slot): Slot = slot match {
+    case element: ElementSlot => element.copy(indexExpr = None)
+    case other                => other
+  }
 
   /** The slot of a designator in an object of type `tpe`: the member a field designator names, the element a constant
     * array designator names.
@@ -375,7 +391,10 @@ trait AstForInitializersCreator { this: AstCreator =>
         (path, placement) <- pathTo(frame, designator)
         next              <-
           if (i == ds.size - 1) Some(obj)
-          else Option.unless(isRangeDesignator(designator))(placement).flatMap(at => objectAt(at.obj, at.slot))
+          else
+            Option
+              .unless(isRangeDesignator(designator))(placement)
+              .flatMap(at => objectAt(at.obj, referenceTo(at.slot)))
       } yield (path ++ frames, next)
     }
     reached.map(_._1) match {
@@ -564,7 +583,7 @@ trait AstForInitializersCreator { this: AstCreator =>
   private def designatedTarget(entry: IASTNode, ds: Seq[IASTNode]): Option[Ast] =
     for {
       last   <- ds.lastOption
-      filled <- designatedObject(entry, ds.init)
+      filled <- designatedObject(entry, ds.init, lowerIndexes = true)
       slot   <- designatedSlot(filled.tpe, last)
       target <- slot match {
         case MemberSlot(field) =>

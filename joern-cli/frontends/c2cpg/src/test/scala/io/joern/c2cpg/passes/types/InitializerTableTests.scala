@@ -257,6 +257,32 @@ class InitializerTableArrayDesignatedListTests extends C2CpgSuite {
   }
 }
 
+class InitializerTableComputedDesignatorTests extends C2CpgSuite {
+
+  "A table whose array designators compute their index" should {
+    val cpg = code("""
+        |#define ID(x) ((((x) & 0xff) << 2 | ((x) >> 8 & 0x3)) >> 2)
+        |struct handler { const char *name; int args; int vals; };
+        |static const struct handler handlers[] = {
+        |  [ID(0x10)] = { .name = "a", .args = 1, .vals = 2 },
+        |  [ID(0x11)] = { "b", 3, 4 },
+        |};
+        |""".stripMargin)
+
+    "lower each index once, for the entry whose designator it is" in {
+      cpg.call.nameExact("<operator>.or").size shouldBe 2
+      cpg.assignment.code("\\[.*").target.isCall.nameExact("<operator>.indexAccess").argument(2).isCall.size shouldBe 2
+    }
+
+    "still tie the entries of each element's list to the members they set" in {
+      def entries = cpg.assignment.target.isCall.collectAll[OpNodes.FieldAccess]
+      entries.referencedMember.name.l.sorted shouldBe List("args", "args", "name", "name", "vals", "vals")
+      entries.argument(1).isCall.nameExact("<operator>.indexAccess").argument(1).isIdentifier.name.l.distinct shouldBe
+        List("handlers")
+    }
+  }
+}
+
 class InitializerTableMacroNamedTests extends C2CpgSuite {
 
   "A table whose name a macro builds" should {

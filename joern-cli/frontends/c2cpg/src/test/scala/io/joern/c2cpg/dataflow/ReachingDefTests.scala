@@ -269,4 +269,23 @@ class ReachingDefTests extends DataFlowCodeToCpgSuite {
       cpg.call("sink").argument.reachableByFlows(cpg.literal.code("6")).l should not be empty
     }
   }
+
+  "A table whose array designators compute their index" should {
+    val entries = (0 until 100).map(i => s"[ID($i)] = { .addr = $i, .value = $i, .mask = $i }").mkString(", ")
+    val cpg     = code(s"""
+      |#define ID(x) ((((x) & 0xff) << 2 | ((x) >> 8 & 0x3)) >> 2)
+      |struct reg { int addr; int value; int mask; };
+      |int source(void);
+      |void sink(int);
+      |void init(void) {
+      | int a = source();
+      | struct reg seq[100] = { $entries };
+      | sink(a);
+      |}
+      |""".stripMargin)
+
+    "keep the flows of the function that holds it" in {
+      cpg.call("sink").argument.reachableByFlows(cpg.call("source")).l should not be empty
+    }
+  }
 }
