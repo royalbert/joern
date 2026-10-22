@@ -12,6 +12,7 @@ import io.joern.c2cpg.parser.JSONCompilationDatabaseParser.CompilationDatabase
 import io.joern.x2cpg.SourceFiles
 import io.joern.x2cpg.utils.{Report, TimeUtils}
 import io.shiftleft.codepropertygraph.generated.Cpg
+import io.shiftleft.codepropertygraph.generated.nodes.{NewCall, NewTypeDecl}
 import io.shiftleft.passes.ForkJoinParallelCpgPassWithAccumulator
 import org.apache.commons.lang3.StringUtils
 import org.eclipse.cdt.core.dom.ast.gnu.cpp.GPPLanguage
@@ -24,6 +25,29 @@ import scala.collection.mutable
 
 object AstCreationPass {
 
+  /** Where a struct, union or class is defined: the file CDT read the definition from, the offset of its specifier
+    * there, the specifier's offset in the macro expansion it starts in (-1 if it starts in the file itself), and the
+    * name the specifier gives the type as CDT reads it (empty if anonymous). It is the same in every translation unit
+    * that sees the definition.
+    */
+  final case class DeclarationPlace(file: String, offset: Int, offsetInMacroExpansion: Int, name: String)
+
+  /** The TYPE_DECL made for the definition at a [[DeclarationPlace]], and whether the file it was made from was parsed
+    * as C++ (a header may be parsed both as C and as C++).
+    */
+  final case class PlacedTypeDecl(typeDecl: NewTypeDecl, isCpp: Boolean)
+
+  /** A field access whose field CDT resolved: the access, the place of the definition of the field's struct, union or
+    * class, the field's name, the line of the field's declarator, and whether the access's file was parsed as C++.
+    */
+  final case class ResolvedFieldAccess(
+    access: NewCall,
+    place: DeclarationPlace,
+    member: String,
+    memberLine: Option[Int],
+    isCpp: Boolean
+  )
+
   // LinkedHash* collections: ForkJoinParallelCpgPassWithAccumulator merges accumulators in
   // part (i.e. sorted file) order, so insertion order — and thus iteration order — is
   // deterministic across runs. mergeWith must stay associative for this to hold.
@@ -31,9 +55,17 @@ object AstCreationPass {
     usedTypes: mutable.LinkedHashSet[String] = mutable.LinkedHashSet.empty,
     methodDeclarations: mutable.LinkedHashMap[String, FunctionDeclNodePass.MethodInfo] = mutable.LinkedHashMap.empty,
     methodDefinitions: mutable.LinkedHashSet[String] = mutable.LinkedHashSet.empty,
-    headerIncludes: mutable.LinkedHashMap[String, HeaderFileParserLanguage] = mutable.LinkedHashMap.empty
+    headerIncludes: mutable.LinkedHashMap[String, HeaderFileParserLanguage] = mutable.LinkedHashMap.empty,
+    typeDecls: mutable.LinkedHashMap[DeclarationPlace, mutable.ArrayBuffer[PlacedTypeDecl]] =
+      mutable.LinkedHashMap.empty,
+    fieldAccesses: mutable.ArrayBuffer[ResolvedFieldAccess] = mutable.ArrayBuffer.empty
   ) {
     def registerType(typeName: String): Unit = usedTypes.add(typeName)
+
+    def registerTypeDecl(place: DeclarationPlace, typeDecl: PlacedTypeDecl): Unit =
+      typeDecls.getOrElseUpdate(place, mutable.ArrayBuffer.empty).addOne(typeDecl)
+
+    def registerFieldAccess(access: ResolvedFieldAccess): Unit = fieldAccesses.addOne(access)
 
     def registerMethodDeclaration(fullName: String, methodInfo: FunctionDeclNodePass.MethodInfo): Unit = {
       methodDeclarations.getOrElseUpdate(fullName, methodInfo)
@@ -68,6 +100,10 @@ object AstCreationPass {
       other.methodDeclarations.foreach { case (k, v) => methodDeclarations.getOrElseUpdate(k, v) }
       methodDefinitions ++= other.methodDefinitions
       other.headerIncludes.foreach { case (path, lang) => updateHeaderFileParserLanguage(path, lang) }
+      other.typeDecls.foreach { case (place, placed) =>
+        typeDecls.getOrElseUpdate(place, mutable.ArrayBuffer.empty).addAll(placed)
+      }
+      fieldAccesses.addAll(other.fieldAccesses)
     }
   }
 
@@ -106,6 +142,12 @@ class AstCreationPass(
     })
 
   def headerIncludes(): Map[String, HeaderFileParserLanguage] = _finalAccumulator.headerIncludes.toMap
+
+  def typeDeclsByPlace()
+    : collection.Map[AstCreationPass.DeclarationPlace, collection.Seq[AstCreationPass.PlacedTypeDecl]] =
+    _finalAccumulator.typeDecls
+
+  def fieldAccesses(): collection.Seq[AstCreationPass.ResolvedFieldAccess] = _finalAccumulator.fieldAccesses
 
   override def createAccumulator(): Accumulator = Accumulator()
 

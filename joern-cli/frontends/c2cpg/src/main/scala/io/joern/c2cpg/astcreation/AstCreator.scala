@@ -32,7 +32,8 @@ class AstCreator(
     with AstCreatorHelper
     with FullNameProvider
     with TypeNameProvider
-    with MacroHandler {
+    with MacroHandler
+    with FieldAccessLinking {
 
   protected val logger: Logger = LoggerFactory.getLogger(classOf[AstCreator])
 

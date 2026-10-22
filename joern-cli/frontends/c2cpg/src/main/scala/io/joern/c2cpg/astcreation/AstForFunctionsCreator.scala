@@ -288,6 +288,7 @@ trait AstForFunctionsCreator { this: AstCreator =>
         scope.addVariableReference(Defines.This, thisIdentifier, thisTpe, EvaluationStrategies.BY_SHARING)
         val member = fieldIdentifierNode(ident, identifierName, identifierName)
         val ma     = callNode(ident, code, op, op, DispatchTypes.STATIC_DISPATCH, None, Some(thisTpe))
+        registerFieldAccess(ma, ident)
         callAst(ma, Seq(Ast(thisIdentifier), Ast(member)))
       case None =>
         val tpe = safeCdtCall(ident.getBinding) match {

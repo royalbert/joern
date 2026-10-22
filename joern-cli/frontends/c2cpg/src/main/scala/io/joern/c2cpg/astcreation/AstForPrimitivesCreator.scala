@@ -219,6 +219,7 @@ trait AstForPrimitivesCreator { this: AstCreator =>
               val member  = fieldIdentifierNode(ident, identifierName, identifierName)
               val callTpe = Some(registerType(tpe))
               val ma      = callNode(ident, code, op, op, DispatchTypes.STATIC_DISPATCH, None, callTpe)
+              registerFieldAccess(ma, ident.getName)
               callAst(ma, Seq(Ast(thisIdentifier), Ast(member)))
             case None => tpe
           }
@@ -249,6 +250,7 @@ trait AstForPrimitivesCreator { this: AstCreator =>
     val owner        = astForExpression(fieldRef.getFieldOwner)
     val memberName   = fieldRef.getFieldName.toString
     val member       = fieldIdentifierNode(fieldRef, memberName, memberName)
+    registerFieldAccess(ma, fieldRef.getFieldName)
     callAst(ma, List(owner, Ast(member)))
   }
 
@@ -339,6 +341,7 @@ trait AstForPrimitivesCreator { this: AstCreator =>
           replaceQualifiedNameSeparator(qualId.getLastName.toString),
           qualId.getLastName.toString
         )
+        registerFieldAccess(ma, qualId.getLastName)
         callAst(ma, List(owner, Ast(member)))
     }
   }

@@ -475,6 +475,7 @@ trait AstForTypesCreator { this: AstCreator =>
       case other =>
         typeDeclNode(other, name, fullName, filename, codeString, alias = alias)
     }
+    registerCompositeDeclaration(typeSpecifier, typeDecl)
 
     val typeRefNodeMaybe = typeRefIdStack.headOption match {
       case None => Some(typeRefNode(typeSpecifier, codeString, fullName))

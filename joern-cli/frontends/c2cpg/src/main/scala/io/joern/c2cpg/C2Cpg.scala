@@ -46,6 +46,8 @@ class C2Cpg extends X2CpgFrontend {
       new TypeDeclNodePass(cpg, config).createAndApply()
       new FunctionDeclNodePass(cpg, headerPass.unhandledMethodDeclarations(), config).createAndApply()
       new FullNameUniquenessPass(cpg).createAndApply()
+      new FieldAccessMemberLinkerPass(cpg, headerPass.typeDeclsByPlace(), headerPass.fieldAccesses())
+        .createAndApply()
       report.print()
     }
   }

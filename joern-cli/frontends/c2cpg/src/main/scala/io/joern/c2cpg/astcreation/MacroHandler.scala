@@ -178,7 +178,11 @@ trait MacroHandler { this: AstCreator =>
   private def argumentTrees(arguments: List[String], ast: Ast): List[Option[Ast]] = {
     arguments.zipWithIndex.map { case (arg, argIndex) =>
       val rootNode = argForCode(arg, ast)
-      rootNode.map(node => ast.subTreeCopy(node.asInstanceOf[AstNodeNew], argIndex + 1))
+      rootNode.map { node =>
+        val argumentAst = ast.subTreeCopy(node.asInstanceOf[AstNodeNew], argIndex + 1)
+        registerCopiedFieldAccesses(ast, node, argumentAst)
+        argumentAst
+      }
     }
   }
 
