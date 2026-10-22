@@ -205,10 +205,12 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
   /** An initializer list defines the value it builds and nothing else: it does not write to its entries. An entry that
     * the list holds as an assignment to the member it sets (`r` in `{ r }`, written `.read = r`) likewise defines only
     * itself, the part of the object the list fills; the member it names is not a variable that later code reads. A
-    * designated entry (`{ .read = r }`) is such an assignment inside a block the list holds.
+    * designated entry (`{ .read = r }`) is such an assignment inside a block the list holds. An assignment to a
+    * variable that the code writes as an entry (`{ x = f() }`) is no such entry: it defines its variable.
     */
   private def isInitializerEntry(node: Expression): Boolean = node match {
-    case call: Call if call.name == Operators.assignment =>
+    case call: Call
+        if call.name == Operators.assignment && !call.argumentOption(1).exists(_.isInstanceOf[Identifier]) =>
       call.astParent match {
         case list: Call   => list.name == Operators.arrayInitializer
         case block: Block =>

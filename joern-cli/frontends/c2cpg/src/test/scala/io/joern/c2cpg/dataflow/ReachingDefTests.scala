@@ -200,6 +200,22 @@ class ReachingDefTests extends DataFlowCodeToCpgSuite {
     }
   }
 
+  "An assignment written as an entry of a list" should {
+    val cpg = code("""
+      |int source(void);
+      |void sink(int);
+      |void init(void) {
+      | int x;
+      | int a[1] = { x = source() };
+      | sink(x);
+      |}
+      |""".stripMargin)
+
+    "still define its variable" in {
+      cpg.call("sink").argument.reachableByFlows(cpg.call("source")).l should not be empty
+    }
+  }
+
   "A compound literal" should {
     val cpg = code("""
       |struct cfg { int len; int max; };
