@@ -16,7 +16,9 @@ import io.shiftleft.semanticcpg.language.*
   * files' definitions of the same name make no difference. The member is the TYPE_DECL's member with the field's name;
   * where the branches of an `#if` in the struct's body declare several members of that name, the one on the line of the
   * declarator CDT bound the field to. A header parsed both as C and as C++ has two TYPE_DECLs at one place; the one of
-  * the access's language is taken. An access with no TYPE_DECL at its place, or with more than one, is not linked here.
+  * the access's language is taken. A C++ file that includes a C header inside an `extern "C"` block makes another
+  * TYPE_DECL for each of the header's structs, at the same place; the one made by the header's own parse is taken. An
+  * access with no TYPE_DECL at its place, or with more than one left, is not linked here.
   *
   * Accesses not linked here are left to x2cpg's `FieldAccessLinkerPass`, which skips calls that have a REF edge.
   */
@@ -47,10 +49,11 @@ class FieldAccessMemberLinkerPass(
   private def typeDeclFor(resolved: ResolvedFieldAccess): Option[TypeDecl] = {
     val candidates   = typeDecls.getOrElse(resolved.place, Seq.empty).toList
     val sameLanguage = candidates.filter(_.isCpp == resolved.isCpp)
-    val inLanguage   = (if (sameLanguage.nonEmpty) sameLanguage else candidates).flatMap { placed =>
+    val inLanguage   = if (sameLanguage.nonEmpty) sameLanguage else candidates
+    val fromOwnFile  = inLanguage.filter(_.fromOwnFile)
+    onlyOne((if (fromOwnFile.nonEmpty) fromOwnFile else inLanguage).flatMap { placed =>
       placed.typeDecl.storedRef.collect { case typeDecl: TypeDecl => typeDecl }
-    }
-    onlyOne(inLanguage)
+    })
   }
 
   private def onlyOne[T](candidates: List[T]): Option[T] = candidates match {

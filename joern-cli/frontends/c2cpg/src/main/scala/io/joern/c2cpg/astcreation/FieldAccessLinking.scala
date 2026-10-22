@@ -44,7 +44,7 @@ trait FieldAccessLinking { this: AstCreator =>
   /** Registers `typeDecl`, made for the struct, union or class defined by `specifier`. */
   protected def registerCompositeDeclaration(specifier: IASTCompositeTypeSpecifier, typeDecl: NewTypeDecl): Unit = {
     placeOf(specifier).foreach { place =>
-      accumulator.registerTypeDecl(place, PlacedTypeDecl(typeDecl, isCpp))
+      accumulator.registerTypeDecl(place, PlacedTypeDecl(typeDecl, isCpp, fromOwnFile = !isIncludedNode(specifier)))
     }
   }
 

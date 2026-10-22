@@ -32,10 +32,12 @@ object AstCreationPass {
     */
   final case class DeclarationPlace(file: String, offset: Int, offsetInMacroExpansion: Int, name: String)
 
-  /** The TYPE_DECL made for the definition at a [[DeclarationPlace]], and whether the file it was made from was parsed
-    * as C++ (a header may be parsed both as C and as C++).
+  /** The TYPE_DECL made for the definition at a [[DeclarationPlace]], whether the file it was made from was parsed as
+    * C++ (a header may be parsed both as C and as C++), and whether it was made by the parse of the file that holds the
+    * definition. c2cpg also lowers the declarations of an `extern "C"` block that come from a header the block
+    * includes, so a C++ file's parse can make another TYPE_DECL for a header's struct.
     */
-  final case class PlacedTypeDecl(typeDecl: NewTypeDecl, isCpp: Boolean)
+  final case class PlacedTypeDecl(typeDecl: NewTypeDecl, isCpp: Boolean, fromOwnFile: Boolean)
 
   /** A field access whose field CDT resolved: the access, the place of the definition of the field's struct, union or
     * class, the field's name, the line of the field's declarator, and whether the access's file was parsed as C++.

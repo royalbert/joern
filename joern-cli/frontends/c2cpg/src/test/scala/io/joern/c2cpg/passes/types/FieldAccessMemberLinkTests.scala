@@ -393,6 +393,43 @@ class FieldAccessMemberLinkTests extends C2CpgSuite {
     }
   }
 
+  "Field accesses to a struct of a C header that a C++ file includes inside an extern \"C\" block" should {
+    val cpg = code(
+      """
+        |#include "h.h"
+        |int usec(struct cmd *c) { return c->id; }
+        |""".stripMargin,
+      "c.c"
+    ).moreCode(
+      """
+        |#ifdef __cplusplus
+        |extern "C" {
+        |#endif
+        |#include "h.h"
+        |#ifdef __cplusplus
+        |}
+        |#endif
+        |int helper(struct cmd *c);
+        |""".stripMargin,
+      "w.h"
+    ).moreCode(
+      """
+        |#include "w.h"
+        |int use(cmd *c) { return c->id + c->flags; }
+        |""".stripMargin,
+      "u.cpp"
+    ).moreCode("struct cmd { int id; int flags; };\n", "h.h")
+
+    def parseOf(method: String, access: String): List[String] =
+      cpg.method.nameExact(method).ast.isCall.codeExact(access).referencedMember.typeDecl.astParent.isMethod.fullName.l
+
+    "reach the member of the header's own parse in the access's language" in {
+      parseOf("use", "c->id") shouldBe List("h.h:<global><cpp>")
+      parseOf("use", "c->flags") shouldBe List("h.h:<global><cpp>")
+      parseOf("usec", "c->id") shouldBe List("h.h:<global>")
+    }
+  }
+
   "A field access CDT cannot resolve" should {
     val cpg = code("""
         |int f(struct unknown *u) { return u->x; }
