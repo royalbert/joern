@@ -630,3 +630,46 @@ class InitializerTableCompoundLiteralTests extends C2CpgSuite {
     }
   }
 }
+
+class InitializerTableUnknownMemberTests extends C2CpgSuite {
+
+  "A designator in a list whose type is not known" should {
+    val cpg = code("""
+        |static struct undef_t u = { .alpha = 1, .beta = { .gamma = 2 } };
+        |void set(void) {
+        |  struct undef_t local = { .zeta = { .eta = 3 } };
+        |}
+        |""".stripMargin)
+
+    "declare no variable for the member it names" in {
+      cpg.local.name.l.sorted shouldBe List("local", "u")
+    }
+
+    "be the field identifier of that member" in {
+      cpg.assignment
+        .code("\\.(gamma|eta) = .*")
+        .target
+        .map(target => (target.label, target.code))
+        .l
+        .sorted shouldBe List(("FIELD_IDENTIFIER", "eta"), ("FIELD_IDENTIFIER", "gamma"))
+    }
+  }
+}
+
+class InitializerTableNoObjectCppTests extends C2CpgSuite(FileDefaults.CppExt) {
+
+  "A designator in a list that fills no named object" should {
+    val cpg = code("""
+        |struct A { int x; };
+        |void use(A a);
+        |void call() { use({ .x = 2 }); }
+        |""".stripMargin)
+
+    "declare no variable for the member it names, and be that member's field identifier" in {
+      cpg.local.name.l shouldBe empty
+      cpg.assignment.code("\\.x = 2").target.map(target => (target.label, target.code)).l shouldBe List(
+        ("FIELD_IDENTIFIER", "x")
+      )
+    }
+  }
+}

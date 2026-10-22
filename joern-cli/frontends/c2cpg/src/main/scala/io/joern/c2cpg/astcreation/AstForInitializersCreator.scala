@@ -59,7 +59,8 @@ trait AstForInitializersCreator { this: AstCreator =>
     designatedInitializerAst(initializer, initializer.getDesignators.toSeq, initializer.getOperand)
 
   /** A designated entry `.ops[1].read = r` is one assignment to the slot its designators lead to, `dev.ops[1].read`.
-    * Where they lead to no known member, each designator is an assignment of its own, as before.
+    * Where they lead to no known member, each designator is an assignment of its own, and a field designator is the
+    * field identifier of the member it names, never a variable.
     */
   private def designatedInitializerAst(initializer: IASTNode, ds: Seq[IASTNode], operand: IASTNode): Ast = {
     val node = blockNode(initializer)
@@ -79,9 +80,13 @@ trait AstForInitializersCreator { this: AstCreator =>
           .argumentIndex(offset)
       callAst(callNode_, List(left, astForNode(operand)))
     }
+    def designatorAst(designator: IASTNode): Ast = fieldDesignatorName(designator) match {
+      case Some(name) => Ast(fieldIdentifierNode(designator, code(name), code(name)))
+      case None       => astForNode(designator)
+    }
     val calls = designatedTarget(initializer, ds) match {
       case Some(target) => List(assignment(target, 1))
-      case None         => withIndex(ds)((designator, offset) => assignment(astForNode(designator), offset)).toList
+      case None         => withIndex(ds)((designator, offset) => assignment(designatorAst(designator), offset)).toList
     }
     scope.popScope()
     blockAst(node, calls)
