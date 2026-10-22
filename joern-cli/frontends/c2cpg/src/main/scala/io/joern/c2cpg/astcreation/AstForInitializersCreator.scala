@@ -577,6 +577,7 @@ trait AstForInitializersCreator { this: AstCreator =>
         None,
         Some(registerType(declaringTypeName(field.getType)))
       )
+    registerFieldAccess(access, field)
     callAst(access, List(filled.ast(at), Ast(fieldIdentifierNode(at, member, member))))
   }
 

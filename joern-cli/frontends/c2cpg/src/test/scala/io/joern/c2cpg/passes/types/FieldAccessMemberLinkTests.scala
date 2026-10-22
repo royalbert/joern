@@ -255,18 +255,10 @@ class FieldAccessMemberLinkTests extends C2CpgSuite {
       "params.h"
     )
 
-    "reach the member of the anonymous struct or union that declares it" in {
+    "reach the member of the struct that holds the anonymous members" in {
       List("p->flags", "p->level", "p->count").map { access =>
-        cpg.fieldAccess
-          .codeExact(access)
-          .referencedMember
-          .map(member => member.name -> member.typeDecl.member.name.l)
-          .l
-      } shouldBe List(
-        List("flags" -> List("flags", "reserved8")),
-        List("level" -> List("level", "count")),
-        List("count" -> List("level", "count"))
-      )
+        cpg.fieldAccess.codeExact(access).referencedMember.map(member => member.name -> member.typeDecl.name).l
+      } shouldBe List(List("flags" -> "params"), List("level" -> "params"), List("count" -> "params"))
     }
   }
 

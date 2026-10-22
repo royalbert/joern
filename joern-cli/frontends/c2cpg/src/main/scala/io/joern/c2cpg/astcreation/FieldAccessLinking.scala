@@ -33,10 +33,12 @@ trait FieldAccessLinking { this: AstCreator =>
     */
   private val registeredAccesses = new java.util.IdentityHashMap[NewCall, ResolvedFieldAccess]()
 
-  /** Where each struct, union or class whose fields this file accesses is defined, by its binding; a struct's fields
-    * are usually accessed many times.
+  /** Where each struct, union or class whose fields this file accesses is defined, and where the struct or union is
+    * that holds it as an anonymous member, if it is one, by its binding; a struct's fields are usually accessed many
+    * times.
     */
-  private val ownerPlaces = new java.util.IdentityHashMap[IBinding, Option[DeclarationPlace]]()
+  private val ownerPlaces =
+    new java.util.IdentityHashMap[IBinding, Option[(DeclarationPlace, Option[DeclarationPlace])]]()
 
   /** The line of the declarator that declares each field this file accesses, by its binding. */
   private val fieldLines = new java.util.IdentityHashMap[IField, Option[Int]]()
@@ -60,11 +62,12 @@ trait FieldAccessLinking { this: AstCreator =>
   protected def registerFieldAccess(access: NewCall, field: IField): Unit = {
     for {
       owner  <- safeCdtCall(field.getCompositeTypeOwner)
-      place  <- ownerPlaces.computeIfAbsent(owner, _ => definitionSpecifier(owner).flatMap(placeOf))
+      places <- ownerPlaces.computeIfAbsent(owner, _ => definitionSpecifier(owner).flatMap(placesOf))
       member <- safeCdtCall(field.getName).filter(_.nonEmpty)
     } {
-      val line     = fieldLines.computeIfAbsent(field, _ => declarationLine(field))
-      val resolved = ResolvedFieldAccess(access, place, member, line, isCpp)
+      val (place, enclosingPlace) = places
+      val line                    = fieldLines.computeIfAbsent(field, _ => declarationLine(field))
+      val resolved                = ResolvedFieldAccess(access, place, member, line, isCpp, enclosingPlace)
       registeredAccesses.put(access, resolved)
       accumulator.registerFieldAccess(resolved)
     }
@@ -160,6 +163,28 @@ trait FieldAccessLinking { this: AstCreator =>
           case _                                     => None
         }
       case _ => None
+    }
+  }
+
+  /** The place of `specifier`, and the place of the struct or union it is an anonymous member of, if it is one. */
+  private def placesOf(specifier: IASTCompositeTypeSpecifier): Option[(DeclarationPlace, Option[DeclarationPlace])] = {
+    val enclosing = Some(outermostOfAnonymousMember(specifier)).filterNot(_ eq specifier)
+    placeOf(specifier).map(place => (place, enclosing.flatMap(placeOf)))
+  }
+
+  /** The struct or union `specifier` is an anonymous member of (`struct S { union { int a; }; }`), through nested
+    * anonymous members; `specifier` itself if it is none.
+    */
+  @tailrec
+  private def outermostOfAnonymousMember(specifier: IASTCompositeTypeSpecifier): IASTCompositeTypeSpecifier = {
+    specifier.getParent match {
+      case member: IASTSimpleDeclaration
+          if member.getDeclarators.isEmpty && safeCdtCall(specifier.getName.toString).exists(_.isEmpty) =>
+        member.getParent match {
+          case enclosing: IASTCompositeTypeSpecifier => outermostOfAnonymousMember(enclosing)
+          case _                                     => specifier
+        }
+      case _ => specifier
     }
   }
 

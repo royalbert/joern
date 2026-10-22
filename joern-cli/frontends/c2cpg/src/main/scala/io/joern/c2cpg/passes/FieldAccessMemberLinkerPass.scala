@@ -18,7 +18,9 @@ import io.shiftleft.semanticcpg.language.*
   * declarator CDT bound the field to. A header parsed both as C and as C++ has two TYPE_DECLs at one place; the one of
   * the access's language is taken. A C++ file that includes a C header inside an `extern "C"` block makes another
   * TYPE_DECL for each of the header's structs, at the same place; the one made by the header's own parse is taken. An
-  * access with no TYPE_DECL at its place, or with more than one left, is not linked here.
+  * access with no TYPE_DECL at its place, or with more than one left, is not linked here. A field of an anonymous
+  * member (`struct S { union { int a; }; }`) is linked to the member of that name of the struct or union that holds the
+  * anonymous member, where it has one, and otherwise to the anonymous member's own.
   *
   * Accesses not linked here are left to x2cpg's `FieldAccessLinkerPass`, which skips calls that have a REF edge.
   */
@@ -33,21 +35,22 @@ class FieldAccessMemberLinkerPass(
       for {
         access <- resolved.access.storedRef.collect { case call: Call => call }
         if !access._refOut.hasNext
-        typeDecl <- typeDeclFor(resolved)
-        member   <- memberOf(typeDecl, resolved)
+        member <- resolved.enclosingPlace.flatMap(memberAt(_, resolved)).orElse(memberAt(resolved.place, resolved))
       } diffGraph.addEdge(access, member, EdgeTypes.REF)
     }
   }
 
-  private def memberOf(typeDecl: TypeDecl, resolved: ResolvedFieldAccess): Option[Member] = {
-    typeDecl._memberViaAstOut.nameExact(resolved.member).l match {
-      case List(member) => Some(member)
-      case several      => onlyOne(several.filter(_.lineNumber == resolved.memberLine))
+  private def memberAt(place: DeclarationPlace, resolved: ResolvedFieldAccess): Option[Member] = {
+    typeDeclAt(place, resolved).flatMap { typeDecl =>
+      typeDecl._memberViaAstOut.nameExact(resolved.member).l match {
+        case List(member) => Some(member)
+        case several      => onlyOne(several.filter(_.lineNumber == resolved.memberLine))
+      }
     }
   }
 
-  private def typeDeclFor(resolved: ResolvedFieldAccess): Option[TypeDecl] = {
-    val candidates   = typeDecls.getOrElse(resolved.place, Seq.empty).toList
+  private def typeDeclAt(place: DeclarationPlace, resolved: ResolvedFieldAccess): Option[TypeDecl] = {
+    val candidates   = typeDecls.getOrElse(place, Seq.empty).toList
     val sameLanguage = candidates.filter(_.isCpp == resolved.isCpp)
     val inLanguage   = if (sameLanguage.nonEmpty) sameLanguage else candidates
     val fromOwnFile  = inLanguage.filter(_.fromOwnFile)

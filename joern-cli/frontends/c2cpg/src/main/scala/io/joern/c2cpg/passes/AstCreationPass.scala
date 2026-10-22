@@ -40,14 +40,18 @@ object AstCreationPass {
   final case class PlacedTypeDecl(typeDecl: NewTypeDecl, isCpp: Boolean, fromOwnFile: Boolean)
 
   /** A field access whose field CDT resolved: the access, the place of the definition of the field's struct, union or
-    * class, the field's name, the line of the field's declarator, and whether the access's file was parsed as C++.
+    * class, the field's name, the line of the field's declarator, and whether the access's file was parsed as C++. If
+    * that struct or union is an anonymous member (`struct S { union { int a; }; }`), `enclosingPlace` is the place of
+    * the struct or union it is a member of, through nested anonymous members, whose members the field is a member of
+    * too (C11 6.7.2.1p13).
     */
   final case class ResolvedFieldAccess(
     access: NewCall,
     place: DeclarationPlace,
     member: String,
     memberLine: Option[Int],
-    isCpp: Boolean
+    isCpp: Boolean,
+    enclosingPlace: Option[DeclarationPlace] = None
   )
 
   // LinkedHash* collections: ForkJoinParallelCpgPassWithAccumulator merges accumulators in
