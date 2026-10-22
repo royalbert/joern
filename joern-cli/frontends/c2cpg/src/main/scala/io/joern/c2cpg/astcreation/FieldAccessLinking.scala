@@ -124,14 +124,28 @@ trait FieldAccessLinking { this: AstCreator =>
     }
   }
 
-  /** The specifier that defines `owner`, from the template it specializes, if any. */
+  /** The specifier that defines `owner`. A C++ class template specialization that has a definition of its own, an
+    * explicit specialization (`template <> struct Box<char> { ... }`), is defined by it; one without, an implicit
+    * instantiation, by the template or partial specialization it is made from.
+    */
   @tailrec
   private def definitionSpecifier(owner: IBinding): Option[IASTCompositeTypeSpecifier] = {
-    owner match {
-      case specialization: ICPPSpecialization if specialization.getSpecializedBinding != null =>
-        definitionSpecifier(specialization.getSpecializedBinding)
-      case cBinding: ICInternalBinding     => safeCdtCall(cBinding.getDefinition).flatMap(enclosingSpecifier)
-      case cppBinding: ICPPInternalBinding => safeCdtCall(cppBinding.getDefinition).flatMap(enclosingSpecifier)
+    ownDefinition(owner) match {
+      case Some(definition) => enclosingSpecifier(definition)
+      case None             =>
+        owner match {
+          case specialization: ICPPSpecialization if specialization.getSpecializedBinding != null =>
+            definitionSpecifier(specialization.getSpecializedBinding)
+          case _ => None
+        }
+    }
+  }
+
+  /** The definition CDT has of `binding` itself; an implicit instantiation of a C++ class template has none. */
+  private def ownDefinition(binding: IBinding): Option[IASTNode] = {
+    binding match {
+      case cBinding: ICInternalBinding     => safeCdtCall(cBinding.getDefinition)
+      case cppBinding: ICPPInternalBinding => safeCdtCall(cppBinding.getDefinition)
       case _                               => None
     }
   }

@@ -330,6 +330,41 @@ class FieldAccessMemberLinkTests extends C2CpgSuite {
     }
   }
 
+  "Field accesses to members of C++ class template specializations" should {
+    val cpg = code(
+      """
+        |template <typename T> struct Box { T val; int tag; };
+        |template <> struct Box<char> { char c; int tag; int extra; int get() { return tag + extra; } };
+        |template <> struct Box<long> { long tag; };
+        |template <typename T> struct Box<T *> { T *ptr; int tag; };
+        |int u1(Box<char> *c) { return c->tag + c->extra; }
+        |int u2(Box<long> &l) { return (int)l.tag; }
+        |int u3(Box<int> b) { return b.tag; }
+        |int u4(Box<int *> p) { return p.tag; }
+        |""".stripMargin,
+      "test.cpp"
+    )
+
+    def memberLines(access: String): List[Int] =
+      cpg.fieldAccess.codeExact(access).referencedMember.lineNumber.l
+
+    "reach the member of the explicit specialization the access's type is" in {
+      memberLines("c->tag") shouldBe List(3)
+      memberLines("c->extra") shouldBe List(3)
+      memberLines("l.tag") shouldBe List(4)
+    }
+
+    "reach the explicit specialization's own member through an implicit this" in {
+      cpg.fieldAccess.codeExact("this->tag").lineNumber(3).referencedMember.lineNumber.l shouldBe List(3)
+      cpg.fieldAccess.codeExact("this->extra").lineNumber(3).referencedMember.lineNumber.l shouldBe List(3)
+    }
+
+    "reach the member of the template or partial specialization an implicit instantiation is made from" in {
+      memberLines("b.tag") shouldBe List(2)
+      memberLines("p.tag") shouldBe List(5)
+    }
+  }
+
   "Field accesses to a struct of a header parsed both as C and as C++" should {
     val cpg = code(
       """
