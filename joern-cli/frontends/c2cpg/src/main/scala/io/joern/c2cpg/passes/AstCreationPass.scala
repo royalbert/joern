@@ -12,6 +12,7 @@ import io.joern.c2cpg.parser.JSONCompilationDatabaseParser.CompilationDatabase
 import io.joern.x2cpg.SourceFiles
 import io.joern.x2cpg.utils.{Report, TimeUtils}
 import io.shiftleft.codepropertygraph.generated.Cpg
+import io.shiftleft.codepropertygraph.generated.nodes.{NewCall, NewMember}
 import io.shiftleft.passes.ForkJoinParallelCpgPassWithAccumulator
 import org.apache.commons.lang3.StringUtils
 import org.eclipse.cdt.core.dom.ast.gnu.cpp.GPPLanguage
@@ -24,6 +25,22 @@ import scala.collection.mutable
 
 object AstCreationPass {
 
+  /** Where an enumerator is declared: the file CDT read its declaration from, the offset of its name in that file and
+    * the name. The place is the same in every translation unit that includes the file; the name tells apart enumerators
+    * that one macro call declares at one place.
+    */
+  final case class EnumeratorPlace(file: String, offset: Int, name: String)
+
+  /** The member made for an enumerator, and whether its file was parsed as C++ (a header may be parsed both as C and as
+    * C++).
+    */
+  final case class EnumeratorMember(member: NewMember, isCpp: Boolean)
+
+  /** A reference to an enumerator that another file declares, lowered as a field access, and whether the referencing
+    * file was parsed as C++.
+    */
+  final case class EnumeratorReference(access: NewCall, place: EnumeratorPlace, isCpp: Boolean)
+
   // LinkedHash* collections: ForkJoinParallelCpgPassWithAccumulator merges accumulators in
   // part (i.e. sorted file) order, so insertion order — and thus iteration order — is
   // deterministic across runs. mergeWith must stay associative for this to hold.
@@ -31,9 +48,17 @@ object AstCreationPass {
     usedTypes: mutable.LinkedHashSet[String] = mutable.LinkedHashSet.empty,
     methodDeclarations: mutable.LinkedHashMap[String, FunctionDeclNodePass.MethodInfo] = mutable.LinkedHashMap.empty,
     methodDefinitions: mutable.LinkedHashSet[String] = mutable.LinkedHashSet.empty,
-    headerIncludes: mutable.LinkedHashMap[String, HeaderFileParserLanguage] = mutable.LinkedHashMap.empty
+    headerIncludes: mutable.LinkedHashMap[String, HeaderFileParserLanguage] = mutable.LinkedHashMap.empty,
+    enumeratorMembers: mutable.LinkedHashMap[EnumeratorPlace, mutable.ArrayBuffer[EnumeratorMember]] =
+      mutable.LinkedHashMap.empty,
+    enumeratorReferences: mutable.ArrayBuffer[EnumeratorReference] = mutable.ArrayBuffer.empty
   ) {
     def registerType(typeName: String): Unit = usedTypes.add(typeName)
+
+    def registerEnumeratorMember(place: EnumeratorPlace, member: EnumeratorMember): Unit =
+      enumeratorMembers.getOrElseUpdate(place, mutable.ArrayBuffer.empty).addOne(member)
+
+    def registerEnumeratorReference(reference: EnumeratorReference): Unit = enumeratorReferences.addOne(reference)
 
     def registerMethodDeclaration(fullName: String, methodInfo: FunctionDeclNodePass.MethodInfo): Unit = {
       methodDeclarations.getOrElseUpdate(fullName, methodInfo)
@@ -68,6 +93,10 @@ object AstCreationPass {
       other.methodDeclarations.foreach { case (k, v) => methodDeclarations.getOrElseUpdate(k, v) }
       methodDefinitions ++= other.methodDefinitions
       other.headerIncludes.foreach { case (path, lang) => updateHeaderFileParserLanguage(path, lang) }
+      other.enumeratorMembers.foreach { case (place, members) =>
+        enumeratorMembers.getOrElseUpdate(place, mutable.ArrayBuffer.empty).addAll(members)
+      }
+      enumeratorReferences.addAll(other.enumeratorReferences)
     }
   }
 
@@ -82,7 +111,7 @@ class AstCreationPass(
   report: Report = new Report()
 ) extends ForkJoinParallelCpgPassWithAccumulator[(Path, ILanguage), AstCreationPass.Accumulator](cpg) {
 
-  import AstCreationPass.Accumulator
+  import AstCreationPass.{Accumulator, EnumeratorMember, EnumeratorPlace, EnumeratorReference}
 
   private val compilationDatabase: Option[CompilationDatabase] =
     config.compilationDatabaseFilename.flatMap(JSONCompilationDatabaseParser.parse)
@@ -106,6 +135,11 @@ class AstCreationPass(
     })
 
   def headerIncludes(): Map[String, HeaderFileParserLanguage] = _finalAccumulator.headerIncludes.toMap
+
+  def enumeratorMembers(): collection.Map[EnumeratorPlace, collection.Seq[EnumeratorMember]] =
+    _finalAccumulator.enumeratorMembers
+
+  def enumeratorReferences(): collection.Seq[EnumeratorReference] = _finalAccumulator.enumeratorReferences
 
   override def createAccumulator(): Accumulator = Accumulator()
 

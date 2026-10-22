@@ -1,5 +1,6 @@
 package io.joern.c2cpg.astcreation
 
+import io.joern.c2cpg.passes.AstCreationPass
 import io.joern.x2cpg.Ast
 import io.joern.x2cpg.datastructures.Stack.*
 import io.joern.x2cpg.datastructures.VariableScopeManager
@@ -16,6 +17,8 @@ import org.eclipse.cdt.internal.core.dom.parser.cpp.{
 }
 import org.eclipse.cdt.internal.core.model.ASTStringUtil
 
+import java.nio.file.Paths
+import scala.annotation.tailrec
 import scala.collection.mutable
 import scala.util.Try
 
@@ -31,6 +34,11 @@ trait AstForTypesCreator { this: AstCreator =>
     * resolves shadowing between enums.
     */
   protected val enumMembers: mutable.Map[IBinding, EnumMemberInfo] = mutable.HashMap.empty
+
+  /** The names of an enumerator's CPG member as the AST creator of the file declaring its enum gives them: the name and
+    * full name of the enum type declaration, and the member's type full name.
+    */
+  protected final case class EnumMemberNames(typeName: String, typeFullName: String, memberTypeFullName: String)
 
   protected def astForDecltypeSpecifier(decl: ICPPASTDecltypeSpecifier): Ast = {
     val op       = Defines.OperatorTypeOf
@@ -524,23 +532,114 @@ trait AstForTypesCreator { this: AstCreator =>
     }
   }
 
+  private def enumeratorTypeName(enumerator: IASTEnumerationSpecifier.IASTEnumerator): String = {
+    enumerator.getParent match {
+      case enumeration: ICPPASTEnumerationSpecifier if enumeration.getBaseType != null =>
+        enumeration.getBaseType.toString
+      case _ => typeFor(enumerator)
+    }
+  }
+
+  /** The names of the enum member that the AST creator of another file creates for `enumerator`, for a reference to it
+    * from this file: the name and full name [[astsForEnum]] gives the enum's TYPE_DECL there, and the member's type.
+    *
+    * They are read from the enum's declaration, which CDT's binding of the reference leads to, so they do not depend on
+    * where the reference is. `None` where the declaring file's AST creator gives a name that cannot be read from the
+    * declaration alone: an enum without a tag and without a declarator is named `<enum>N` by a counter of that file,
+    * and the name of an enum without a C++ binding inside a struct or a function depends on that scope.
+    */
+  protected def enumMemberNamesFromDeclaration(
+    enumerator: IASTEnumerationSpecifier.IASTEnumerator
+  ): Option[EnumMemberNames] = {
+    enumerator.getParent match {
+      case enumeration: IASTEnumerationSpecifier =>
+        enumTypeNamesFromDeclaration(enumeration).map { case (typeName, typeFullName) =>
+          EnumMemberNames(typeName, registerType(typeFullName), registerType(enumeratorTypeName(enumerator)))
+        }
+      case _ => None
+    }
+  }
+
+  private def enumTypeNamesFromDeclaration(enumeration: IASTEnumerationSpecifier): Option[(String, String)] = {
+    val tag = shortName(enumeration)
+    if (tag.nonEmpty) {
+      safeGetBinding(enumeration.getName) match {
+        case Some(binding: ICPPBinding) if binding.getName.nonEmpty => Option((tag, fullName(enumeration)))
+        case _ if isDeclaredAtFileScope(enumeration)                => Option((tag, tag))
+        case _                                                      => None
+      }
+    } else if (isDeclaredAtFileScope(enumeration)) {
+      enumeration.getParent match {
+        case declaration: IASTSimpleDeclaration =>
+          declaration.getDeclarators.headOption
+            .map(declarator => registerType(shortName(declarator)))
+            .filter(_.nonEmpty)
+            .map(alias => (alias, alias))
+        case _ => None
+      }
+    } else {
+      None
+    }
+  }
+
+  private def isDeclaredAtFileScope(enumeration: IASTEnumerationSpecifier): Boolean = {
+    @tailrec
+    def isFileScope(node: IASTNode): Boolean = {
+      node match {
+        case _: IASTTranslationUnit               => true
+        case linkage: ICPPASTLinkageSpecification => isFileScope(linkage.getParent)
+        case _                                    => false
+      }
+    }
+    enumeration.getParent match {
+      case declaration: IASTSimpleDeclaration => isFileScope(declaration.getParent)
+      case _                                  => false
+    }
+  }
+
   private def memberAstForEnumerator(
     enumerator: IASTEnumerationSpecifier.IASTEnumerator,
     enumTypeName: String,
     enumTypeFullName: String
   ): Ast = {
-    val tpe = enumerator.getParent match {
-      case enumeration: ICPPASTEnumerationSpecifier if enumeration.getBaseType != null =>
-        enumeration.getBaseType.toString
-      case _ => typeFor(enumerator)
-    }
+    val tpe    = enumeratorTypeName(enumerator)
     val member =
       memberNode(enumerator, ASTStringUtil.getSimpleName(enumerator.getName), code(enumerator), registerType(tpe))
     safeGetBinding(enumerator.getName).foreach(binding =>
       enumMembers.update(binding, EnumMemberInfo(member, enumTypeName, enumTypeFullName))
     )
+    enumeratorPlace(enumerator).foreach { place =>
+      accumulator.registerEnumeratorMember(place, AstCreationPass.EnumeratorMember(member, isCppFile))
+    }
     Ast(member).withChild(Ast(NewModifier().modifierType(ModifierTypes.FINAL)))
   }
+
+  /** The path [[enumeratorPlace]] takes for each file name CDT gives, so that the places this file registers, which are
+    * kept to the end of the parse, share one string per file.
+    */
+  private val placeFiles: mutable.Map[String, String] = mutable.HashMap.empty
+
+  /** Where `enumerator` is declared: the file CDT read its name from and the name's offset there, the same in every
+    * translation unit that includes the file. For an include that does not resolve, c2cpg gives CDT a header of the
+    * same name found elsewhere in the code, which CDT reads under the path it tried; that header's own path is taken.
+    */
+  protected def enumeratorPlace(
+    enumerator: IASTEnumerationSpecifier.IASTEnumerator
+  ): Option[AstCreationPass.EnumeratorPlace] = {
+    val name = enumerator.getName
+    for {
+      location <- nullSafeFileLocation(name)
+      file     <- Option(location.getFileName).filter(_.nonEmpty)
+    } yield {
+      val path = placeFiles.getOrElseUpdate(
+        file,
+        Paths.get(headerFileFinder.substitutedFor(file).getOrElse(file)).normalize().toString
+      )
+      AstCreationPass.EnumeratorPlace(path, location.getNodeOffset, ASTStringUtil.getSimpleName(name))
+    }
+  }
+
+  protected def isCppFile: Boolean = cdtAst.isInstanceOf[ICPPASTTranslationUnit]
 
   protected def astForEnumeratorWithInit(enumerator: IASTEnumerationSpecifier.IASTEnumerator): Ast = {
     if (enumerator.getValue != null) {
