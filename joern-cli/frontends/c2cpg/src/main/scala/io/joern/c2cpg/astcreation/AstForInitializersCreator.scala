@@ -145,8 +145,8 @@ trait AstForInitializersCreator { this: AstCreator =>
     case _ => None
   }
 
-  /** The object the initializer list `list` fills: the variable it initializes, or the element or member of the object
-    * an enclosing list fills that `list` sets. None where there is no named object, as for a compound literal.
+  /** The object the initializer list `list` fills: the variable it initializes, the object a compound literal makes, or
+    * the element or member of the object an enclosing list fills that `list` sets. None where it is unknown.
     */
   private def objectOf(list: IASTInitializerList): Option[InitializedObject] =
     initializedObjects.get(list) match {
@@ -164,7 +164,8 @@ trait AstForInitializersCreator { this: AstCreator =>
         case _                          => None
       }
     case declarator: IASTDeclarator => variableObject(ASTQueries.findInnermostDeclarator(declarator).getName)
-    case outer: IASTInitializerList =>
+    case literal: IASTTypeIdInitializerExpression => compoundLiteralObject(literal)
+    case outer: IASTInitializerList               =>
       for {
         filled    <- objectOf(outer)
         placement <- placements(outer, filled).lift(outer.getClauses.indexWhere(_ eq list)).flatten
@@ -172,6 +173,16 @@ trait AstForInitializersCreator { this: AstCreator =>
       } yield obj
     case parent => designators(parent).flatMap(designatedObject(parent, _))
   }
+
+  /** The object a compound literal makes, `(struct mux){ .port = 1 }` (C17 6.5.2.5). It has no name, so an expression
+    * that names it is a reference to its type, written as the literal's cast, `(struct mux)`: no variable is made up
+    * for it, and nothing refers to it by a name another variable could have.
+    */
+  private def compoundLiteralObject(literal: IASTTypeIdInitializerExpression): Option[InitializedObject] =
+    safeCdtCall(literal.getExpressionType).map { tpe =>
+      val written = s"(${code(literal.getTypeId)})"
+      InitializedObject(written, tpe, at => Ast(typeRefNode(at, written, registerType(declaringTypeName(tpe)))))
+    }
 
   /** Whether the variable `declarator` declares is an array or a C++ aggregate class, which a list without `=`
     * initializes as one with `=` does, calling no constructor ([dcl.init.list]).

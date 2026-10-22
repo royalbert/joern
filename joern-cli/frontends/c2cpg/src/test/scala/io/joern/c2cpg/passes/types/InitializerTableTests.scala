@@ -582,3 +582,51 @@ class InitializerTableCppBraceTests extends C2CpgSuite(FileDefaults.CppExt) {
     }
   }
 }
+
+class InitializerTableCompoundLiteralTests extends C2CpgSuite {
+
+  "Entries of a compound literal" should {
+    val cpg = code("""
+        |struct mux { int port; int (*read)(int); };
+        |struct cfg { const struct mux *mux; int n; };
+        |static int r(int x) { return x; }
+        |static const struct cfg cf = { .mux = &(const struct mux){ .port = 1, .read = r }, 7 };
+        |void set(void) {
+        |  const struct mux *m = &(struct mux){ 3, r };
+        |  struct cfg c = (struct cfg){ .n = 2 };
+        |}
+        |""".stripMargin)
+
+    /** (entry, member it reaches) for every entry on `line` that sets a member. */
+    def ties(line: Int): List[(String, String)] =
+      cpg.assignment
+        .lineNumber(line)
+        .filter(_.code.startsWith("."))
+        .flatMap { assignment =>
+          Iterator(assignment.target).isCall
+            .collectAll[OpNodes.FieldAccess]
+            .referencedMember
+            .map(member => assignment.code.takeWhile(_ != ' ') -> s"${member.typeDecl.fullName}.${member.name}")
+        }
+        .l
+        .sorted
+
+    "set the members of the literal's own object" in {
+      ties(5) shouldBe List(".mux" -> "cfg.mux", ".n" -> "cfg.n", ".port" -> "mux.port", ".read" -> "mux.read")
+      ties(7) shouldBe List(".port" -> "mux.port", ".read" -> "mux.read")
+      ties(8) shouldBe List(".n" -> "cfg.n")
+    }
+
+    "name that object by the literal's type, as it has no variable" in {
+      cpg.fieldAccess.lineNumber(7).argument(1).map(base => (base.label, base.code)).l shouldBe List(
+        ("TYPE_REF", "(struct mux)"),
+        ("TYPE_REF", "(struct mux)")
+      )
+      cpg.fieldAccess.lineNumber(7).argument(1).isTypeRef.typeFullName.l shouldBe List("mux", "mux")
+    }
+
+    "declare no variable for a member it sets" in {
+      cpg.local.name.l.sorted shouldBe List("c", "cf", "m")
+    }
+  }
+}

@@ -199,4 +199,34 @@ class ReachingDefTests extends DataFlowCodeToCpgSuite {
       sink.reachableByFlows(source).l should not be empty
     }
   }
+
+  "A compound literal" should {
+    val cpg = code("""
+      |struct cfg { int len; int max; };
+      |void sink(int);
+      |int foo() {
+      | struct cfg c = (struct cfg){ 7, 8 };
+      | sink(c.max);
+      |}
+      |""".stripMargin)
+
+    "still carry an entry's value to a use of the object the literal makes" in {
+      cpg.call("sink").argument.reachableByFlows(cpg.literal.code("8")).l should not be empty
+    }
+  }
+
+  "A pointer to a compound literal" should {
+    val cpg = code("""
+      |struct cfg { int len; int max; };
+      |void sink(int);
+      |int foo() {
+      | struct cfg *p = &(struct cfg){ .len = 5, .max = 6 };
+      | sink(p->max);
+      |}
+      |""".stripMargin)
+
+    "still carry an entry's value to a use of the object it points to" in {
+      cpg.call("sink").argument.reachableByFlows(cpg.literal.code("6")).l should not be empty
+    }
+  }
 }
