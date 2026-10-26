@@ -27,9 +27,8 @@ object ParserConfig {
     val includes = commands.map { cmd =>
       cmd.compiledFile() -> cmd.includes()
     }.toMap
-    val defaultDefines = DefaultDefines.MSVC_INTEGER_TYPES ++ DefaultDefines.ALIGNMENT_SPECIFIER
-    // User defines take precedence over these defaults but not over the calling conventions (as before).
-    val definedSymbols = defaultDefines ++ config.defines.map { define =>
+    // User defines take precedence over the MSVC integer types but not over the calling conventions (as before).
+    val definedSymbols = DefaultDefines.MSVC_INTEGER_TYPES ++ config.defines.map { define =>
       if (define.contains("=")) {
         // Only the first `=` separates name from value: a value may itself contain `=`, or be empty.
         val split = define.split("=", 2)
