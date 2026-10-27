@@ -13,6 +13,10 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'windows') }}
     runs-on: windows-latest
     timeout-minutes: 120
+    env:
+      # The forked test JVMs default to a quarter of the runner's memory, which on a private repository's
+      # runner is less than the 2 GB array x2cpg's SourceFilesTests writes. sbt's own -Xmx in .sbtopts wins.
+      JAVA_TOOL_OPTIONS: -Xmx4g
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
