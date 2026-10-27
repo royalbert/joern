@@ -14,8 +14,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     env:
-      # The forked test JVMs default to a quarter of the runner's memory, which on a private repository's
-      # runner is less than the 2 GB array x2cpg's SourceFilesTests writes. sbt's own -Xmx in .sbtopts wins.
+      # The forked test JVMs default to a quarter of the runner's 8 GB, 2 GB, which x2cpg's SourceFilesTests
+      # fills with one array of just under 2 GiB. JAVA_TOOL_OPTIONS also reaches sbt's own JVMs, one of which
+      # starts at .sbtopts' -Xms4G, so 4 GB is the lowest maximum that lets it start.
       JAVA_TOOL_OPTIONS: -Xmx4g
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
