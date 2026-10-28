@@ -488,7 +488,7 @@ trait AstForTypesCreator { this: AstCreator =>
     val memberDecls = typeSpecifier.getDeclarations(true).toList
     val memberAsts  =
       memberDecls.flatMap(decl => astsForDeclaration(decl, true)) ++ memberDecls.flatMap(anonymousMemberAsts)
-    val memberNodesWithInitializer = memberDecls.filter(d => declHasInit(d))
+    val memberNodesWithInitializer = memberDecls.filter(decl => declHasInit(decl))
 
     methodAstParentStack.pop()
     typeRefNodeMaybe.foreach(_ => typeRefIdStack.pop())
