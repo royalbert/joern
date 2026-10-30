@@ -5,7 +5,15 @@ import io.joern.dataflowengineoss.queryengine.AccessPathUsage.toTrackedBaseAndAc
 import io.joern.dataflowengineoss.semanticsloader.Semantics
 import io.shiftleft.codepropertygraph.generated.nodes.*
 import io.shiftleft.codepropertygraph.generated.{EdgeTypes, Operators}
-import io.shiftleft.semanticcpg.accesspath.MatchResult
+import io.shiftleft.semanticcpg.accesspath.{
+  AccessElement,
+  AddressOf,
+  Elements,
+  MatchResult,
+  PointerShift,
+  TrackedBase,
+  VariablePointerShift
+}
 import io.shiftleft.semanticcpg.language.*
 import io.shiftleft.codepropertygraph.generated.DiffGraphBuilder
 
@@ -312,14 +320,54 @@ class DdgGenerator(semantics: Semantics) {
   * `n` of the flow graph. This component determines those of the incoming definitions that are relevant as the value
   * they define is actually used by `n`.
   */
-private class UsageAnalyzer(problem: DataFlowProblem[CfgNode, mutable.BitSet], in: Map[CfgNode, Set[Definition]]) {
+private[reachingdef] class UsageAnalyzer(
+  problem: DataFlowProblem[CfgNode, mutable.BitSet],
+  in: Map[CfgNode, Set[Definition]]
+) {
 
   val numberToNode: Map[Definition, CfgNode] = problem.flowGraph.asInstanceOf[ReachingDefFlowGraph].numberToNode
 
   private val allNodes     = in.keys.toList
   private val containerSet =
     Set(Operators.fieldAccess, Operators.indexAccess, Operators.indirectIndexAccess, Operators.indirectFieldAccess)
-  private val indirectionAccessSet                                  = Set(Operators.addressOf, Operators.indirection)
+  private val indirectionAccessSet = Set(Operators.addressOf, Operators.indirection)
+
+  /** The definitions that `isUsing` can accept, indexed by what each of its four tests compares, so that a use is
+    * compared with the definitions sharing a key with it instead of with all of `in(node)`. Each key is a condition its
+    * test cannot pass without: `sameVariable` compares the use's string with a definition's name or code, `isContainer`
+    * with the string of a container's base, and `isPart` the string of the use's base with a definition's name;
+    * `isAlias` needs the same tracked base and, for an exact match, the same access path before its invertible tail.
+    */
+  private val definitionsByString    = mutable.HashMap.empty[String, mutable.ArrayBuffer[Definition]]
+  private val containersByBaseString = mutable.HashMap.empty[Option[String], mutable.ArrayBuffer[Definition]]
+  private val definitionsByName      = mutable.HashMap.empty[String, mutable.ArrayBuffer[Definition]]
+  private val callsByAliasKey        =
+    mutable.HashMap.empty[(TrackedBase, Seq[AccessElement]), mutable.ArrayBuffer[Definition]]
+
+  numberToNode.toSeq.sortBy(_._1).foreach { case (definition, node) =>
+    def add[K](index: mutable.HashMap[K, mutable.ArrayBuffer[Definition]], key: K): Unit =
+      index.getOrElseUpdate(key, mutable.ArrayBuffer.empty) += definition
+    node match {
+      case param: MethodParameterIn =>
+        add(definitionsByString, param.name)
+        add(definitionsByName, param.name)
+      case identifier: Identifier =>
+        add(definitionsByString, identifier.name)
+        add(definitionsByName, identifier.name)
+      case call: Call =>
+        if (indirectionAccessSet.contains(call.name)) {
+          call.argumentOption(1).foreach(argument => add(definitionsByString, argument.code))
+        } else {
+          add(definitionsByString, call.code)
+        }
+        if (containerSet.contains(call.name)) {
+          call.argument.headOption.foreach(base => add(containersByBaseString, nodeToString(base)))
+        }
+        add(callsByAliasKey, aliasKey(call))
+      case _ =>
+    }
+  }
+
   val usedIncomingDefs: Map[CfgNode, Map[CfgNode, Set[Definition]]] = initUsedIncomingDefs()
 
   def initUsedIncomingDefs(): Map[CfgNode, Map[CfgNode, Set[Definition]]] = {
@@ -329,12 +377,58 @@ private class UsageAnalyzer(problem: DataFlowProblem[CfgNode, mutable.BitSet], i
   }
 
   private def usedIncomingDefsForNode(node: CfgNode): Map[CfgNode, Set[Definition]] = {
+    val incoming          = in(node)
+    lazy val incomingSize = incoming.size
     uses(node).map { use =>
-      use -> in(node).filter { inElement =>
-        val inElemNode = numberToNode(inElement)
-        isUsing(use, inElemNode)
+      val candidates = candidatesFor(use)
+      use -> {
+        if (candidates.length > incomingSize) {
+          incoming.filter { inElement =>
+            val inElemNode = numberToNode(inElement)
+            isUsing(use, inElemNode)
+          }
+        } else {
+          usedAmong(candidates, use, incoming)
+        }
       }
     }.toMap
+  }
+
+  /** The definitions of `incoming` that `use` uses, found among its candidates. */
+  private[reachingdef] def usedByIndex(use: CfgNode, incoming: Set[Definition]): Set[Definition] =
+    usedAmong(candidatesFor(use), use, incoming)
+
+  private def usedAmong(candidates: Array[Definition], use: CfgNode, incoming: Set[Definition]): Set[Definition] = {
+    val used = mutable.BitSet()
+    candidates.foreach { candidate =>
+      if (incoming.contains(candidate) && isUsing(use, numberToNode(candidate))) used.add(candidate)
+    }
+    used
+  }
+
+  /** The definitions that share a key with `use` (see [[definitionsByString]]), with repeats. */
+  private def candidatesFor(use: CfgNode): Array[Definition] = {
+    val useString = nodeToString(use)
+    val parts     = use match {
+      case call: Call if containerSet.contains(call.name) =>
+        containerBaseForMatching(call).flatMap(nodeToString).flatMap(definitionsByName.get)
+      case _ => None
+    }
+    val aliases = use match {
+      case call: Call => callsByAliasKey.get(aliasKey(call))
+      case _          => None
+    }
+    val sameOrContainer = useString.flatMap(definitionsByString.get) ++ containersByBaseString.get(useString)
+    (sameOrContainer ++ parts ++ aliases).flatten.toArray
+  }
+
+  /** `isAlias` accepts two calls only if they have the same tracked base and their access paths match exactly, which
+    * `AccessPath.matchAndDiff` grants only to paths whose elements before the invertible tail (address-of and pointer
+    * shifts) are equal.
+    */
+  private def aliasKey(call: Call): (TrackedBase, Seq[AccessElement]) = {
+    val (base, accessPath) = toTrackedBaseAndAccessPathSimple(call)
+    (base, AliasKeys.head(accessPath.elements))
   }
 
   def isUsing(use: CfgNode, inElemNode: CfgNode): Boolean =
@@ -431,4 +525,20 @@ private class UsageAnalyzer(problem: DataFlowProblem[CfgNode, mutable.BitSet], i
     }
   }
 
+}
+
+private[reachingdef] object AliasKeys {
+
+  /** The elements of `elements` before its invertible tail, the trailing address-of and pointer shifts that
+    * `AccessPath.matchAndDiff` does not compare element by element.
+    */
+  def head(elements: Elements): Seq[AccessElement] = {
+    val all = elements.elements
+    all.take(all.lastIndexWhere(element => !isInvertible(element)) + 1).toSeq
+  }
+
+  private def isInvertible(element: AccessElement): Boolean = element match {
+    case AddressOf | VariablePointerShift | _: PointerShift => true
+    case _                                                  => false
+  }
 }
