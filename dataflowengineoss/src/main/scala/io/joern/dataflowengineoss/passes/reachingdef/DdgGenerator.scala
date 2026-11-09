@@ -19,7 +19,7 @@ import io.shiftleft.semanticcpg.accesspath.{
 import io.shiftleft.semanticcpg.language.*
 import io.shiftleft.codepropertygraph.generated.DiffGraphBuilder
 
-import scala.collection.{Set, mutable}
+import scala.collection.{Set, immutable, mutable}
 
 /** Creation of data dependence edges based on solution of the ReachingDefProblem.
   */
@@ -478,11 +478,11 @@ private[reachingdef] class UsageAnalyzer(
     uses(node).map { use =>
       val candidates = candidatesFor(use)
       use -> {
-        if (candidates.length > incomingSize) {
-          incoming.filter { inElement =>
+        if (candidates.iterator.map(_.size).sum > incomingSize) {
+          compact(incoming.iterator.filter { inElement =>
             val inElemNode = numberToNode(inElement)
             isUsing(use, inElemNode)
-          }
+          })
         } else {
           usedAmong(candidates, use, incoming)
         }
@@ -494,16 +494,34 @@ private[reachingdef] class UsageAnalyzer(
   private[reachingdef] def usedByIndex(use: CfgNode, incoming: Set[Definition]): Set[Definition] =
     usedAmong(candidatesFor(use), use, incoming)
 
-  private def usedAmong(candidates: Array[Definition], use: CfgNode, incoming: Set[Definition]): Set[Definition] = {
-    val used = mutable.BitSet()
-    candidates.foreach { candidate =>
-      if (incoming.contains(candidate) && isUsing(use, numberToNode(candidate))) used.add(candidate)
+  private def usedAmong(
+    candidates: Iterable[mutable.ArrayBuffer[Definition]],
+    use: CfgNode,
+    incoming: Set[Definition]
+  ): Set[Definition] =
+    compact(candidates.iterator.flatMap(_.iterator).filter { candidate =>
+      incoming.contains(candidate) && isUsing(use, numberToNode(candidate))
+    })
+
+  /** The definitions a use uses, kept for every use of every node, in whichever form is smaller: a bit set is as long
+    * as its highest definition number, a tree set takes about 48 bytes per definition. Each form iterates in ascending
+    * order, as a bit set does, so the edges built from it keep their order.
+    */
+  private def compact(definitions: Iterator[Definition]): Set[Definition] = {
+    val found = definitions.toArray.distinct.sorted
+    if (found.length <= 4) {
+      immutable.Set.from(found)
+    } else if (48L * found.length < 8L * (found.last / 64 + 1)) {
+      immutable.TreeSet.from(found)
+    } else {
+      mutable.BitSet.fromSpecific(found)
     }
-    used
   }
 
-  /** The definitions that share a key with `use` (see [[definitionsByString]]), with repeats. */
-  private def candidatesFor(use: CfgNode): Array[Definition] = {
+  /** The index lists holding the definitions that share a key with `use` (see [[definitionsByString]]), not copied; a
+    * definition can be in more than one.
+    */
+  private def candidatesFor(use: CfgNode): Iterable[mutable.ArrayBuffer[Definition]] = {
     val useString = nodeToString(use)
     val parts     = use match {
       case call: Call if containerSet.contains(call.name) =>
@@ -515,7 +533,7 @@ private[reachingdef] class UsageAnalyzer(
       case _          => None
     }
     val sameOrContainer = useString.flatMap(definitionsByString.get) ++ containersByBaseString.get(useString)
-    (sameOrContainer ++ parts ++ aliases).flatten.toArray
+    (sameOrContainer ++ parts ++ aliases).toList
   }
 
   /** Returns the field and index accesses rooted at a variable that `call`'s root aliases through a pointer. */
