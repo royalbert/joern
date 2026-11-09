@@ -28,9 +28,9 @@ class ReachingDefPass(cpg: Cpg, maxNumberOfDefinitions: Int = 4000)(implicit s: 
       return
     }
 
-    val solution     = new DataFlowSolver().calculateMopSolutionForwards(problem)
+    val in           = ReachingDefSolver.solveIn(problem)
     val ddgGenerator = new DdgGenerator(s)
-    ddgGenerator.addReachingDefEdges(dstGraph, method, problem, solution)
+    ddgGenerator.addReachingDefEdges(dstGraph, method, problem, in, problem.transferFunction)
   }
 
   /** The reaching-definition problem of `method`. Creating it builds the flow graph, which with the count of
