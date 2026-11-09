@@ -19,7 +19,7 @@ import io.shiftleft.semanticcpg.accesspath.{
 import io.shiftleft.semanticcpg.language.*
 import io.shiftleft.codepropertygraph.generated.DiffGraphBuilder
 
-import scala.collection.{Set, mutable}
+import scala.collection.{Set, immutable, mutable}
 
 /** Creation of data dependence edges based on solution of the ReachingDefProblem.
   *
@@ -528,10 +528,10 @@ private[reachingdef] class UsageAnalyzer(
       val cost  = lists.iterator.map(list => readCost(list, incoming)).sum
       use -> {
         if (cost > longListLength && cost > incomingSize) {
-          incoming.filter { inElement =>
+          compact(incoming.iterator.filter { inElement =>
             val inElemNode = numberToNode(inElement)
             isUsing(use, inElemNode)
-          }
+          })
         } else {
           usedAmong(lists, use, incoming)
         }
@@ -556,14 +556,29 @@ private[reachingdef] class UsageAnalyzer(
       case view: ChunkedDefinitions => view
       case _                        => null
     }
-    val used                              = mutable.BitSet()
+    val used                              = mutable.ArrayBuilder.make[Definition]
     def test(candidate: Definition): Unit =
-      if (!used.contains(candidate) && isUsing(use, numberToNode(candidate))) used.add(candidate)
+      if (isUsing(use, numberToNode(candidate))) used.addOne(candidate)
     lists.foreach { list =>
       if (view != null && list.length >= longListLength) chunkedListOf(list, view).foreachHeld(view)(test)
       else list.foreach(candidate => if (incoming.contains(candidate)) test(candidate))
     }
-    used
+    compact(used.result())
+  }
+
+  /** The definitions a use uses, kept for every use of every node, in whichever form is smaller: a bit set is as long
+    * as its highest definition number, a tree set takes about 48 bytes per definition. Each form iterates in ascending
+    * order, as a bit set does, so the edges built from it keep their order.
+    */
+  private def compact(definitions: IterableOnce[Definition]): Set[Definition] = {
+    val found = definitions.iterator.toArray.distinct.sorted
+    if (found.length <= 4) {
+      immutable.Set.from(found)
+    } else if (48L * found.length < 8L * (found.last / 64 + 1)) {
+      immutable.TreeSet.from(found)
+    } else {
+      mutable.BitSet.fromSpecific(found)
+    }
   }
 
   /** The cost of reading `list` against `incoming`: the words of its [[ChunkedList]] for a list of at least
