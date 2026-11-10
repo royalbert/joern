@@ -4,6 +4,8 @@ import io.joern.c2cpg.testfixtures.DataFlowCodeToCpgSuite
 import io.shiftleft.codepropertygraph.generated.nodes.*
 import io.shiftleft.semanticcpg.language.*
 
+import scala.collection.mutable
+
 /** One case per condition `isUsing` matches under, each with a method that exercises it. */
 class UsageAnalyzerTests extends DataFlowCodeToCpgSuite {
 
@@ -106,6 +108,56 @@ class UsageAnalyzerTests extends DataFlowCodeToCpgSuite {
         val pairs = usedPairs(method)
         pairs should contain("v.a" -> "p->a")
         pairs should contain("p->b" -> "v.b")
+      }
+    }
+  }
+
+  "The definitions a use uses" should {
+    // 3,000 assignments before the code under test, so that its definitions are numbered above 6,000.
+    val assignments = (1 to 3000).map(i => s"  int v$i = $i;").mkString("\n")
+    val cpg         = code(s"""
+        |int f(int c) {
+        |$assignments
+        |  int x = 0;
+        |  if (c == 1) x = 1;
+        |  else if (c == 2) x = 2;
+        |  else if (c == 3) x = 3;
+        |  else if (c == 4) x = 4;
+        |  else x = 5;
+        |  int y = c;
+        |  return g(x) + h(y);
+        |}
+        |""".stripMargin)
+
+    /** For every node of `method` and every use at it, the definitions the use uses. */
+    def usedSets(method: Method): Seq[(CfgNode, CfgNode, collection.Set[Int])] = {
+      val problem  = ReachingDefProblem.create(method)
+      val solution = new DataFlowSolver().calculateMopSolutionForwards(problem)
+      val analyzer = new UsageAnalyzer(problem, solution.in)
+      analyzer.usedIncomingDefs.toSeq.flatMap { case (node, byUse) =>
+        byUse.toSeq.map { case (use, used) => (node, use, used) }
+      }
+    }
+
+    "be kept without a bit set as long as their highest number" in {
+      inside(cpg.method.nameExact("f").l) { case List(method) =>
+        val usesOfY = usedSets(method).collect {
+          case (call: Call, use, used) if call.name == "h" && use.code == "y" => used
+        }
+        usesOfY should not be empty
+        usesOfY.foreach { used =>
+          used.size should be <= 4
+          used.min should be > 6000
+          used should not be a[mutable.BitSet]
+        }
+      }
+    }
+
+    "be handed out in ascending order" in {
+      inside(cpg.method.nameExact("f").l) { case List(method) =>
+        val sets = usedSets(method).map(_._3)
+        sets.foreach(used => used.toSeq shouldBe used.toSeq.sorted)
+        sets.exists(used => used.size > 4 && !used.isInstanceOf[mutable.BitSet]) shouldBe true
       }
     }
   }
