@@ -6,13 +6,13 @@ import io.shiftleft.codepropertygraph.generated.{Cpg, EdgeTypes}
 import io.shiftleft.codepropertygraph.generated.nodes.{CfgNode, Identifier}
 import io.shiftleft.semanticcpg.language.*
 
-/** C passes arguments by value, so a function cannot write a scalar variable of its caller that is passed to it by
-  * name: the call is no definition of that variable.
+/** A function cannot write a scalar variable of its caller that it receives by value, so the call is no definition of
+  * that variable. C passes every argument by value; in C++ the parameter must be a scalar, not a reference.
   */
 class ByValueArgumentFlowTests extends DataFlowCodeToCpgSuite {
 
-  /** The variables that the argument `name` of the calls of `callee` in `method` is stored as defining: the nodes its
-    * reaching-definition edges lead to, other than the call it is an argument of.
+  /** The variables that the argument `name` of the calls of `callee` in `method` is stored as defining: the nodes of
+    * `method` outside the call that its reaching-definition edges lead to.
     */
   private def definedBy(cpg: Cpg, method: String, callee: String, name: String): List[String] =
     cpg.method
@@ -24,8 +24,10 @@ class ByValueArgumentFlowTests extends DataFlowCodeToCpgSuite {
       .nameExact(name)
       .l
       .flatMap { argument =>
+        val call = argument.inCall.head
         argument.outE(EdgeTypes.REACHING_DEF).map(_.dst).collect {
-          case node: CfgNode if !argument.inCall.contains(node) => node.code
+          case node: CfgNode if node.method == argument.method && node != call && !call.argument.contains(node) =>
+            node.code
         }
       }
 
@@ -107,15 +109,42 @@ class ByValueArgumentFlowTests extends DataFlowCodeToCpgSuite {
   "A scalar passed in a C++ file" should {
     val cpg = code(
       """
-        |void inc(int& x) { x++; }
+        |void byval(int v);
+        |void byref(int& v);
+        |void var(int a, ...);
+        |template <typename T> void tmpl(T v);
+        |struct S { void m(int v); };
         |void sink(int v);
-        |void byref(int n) { inc(n); sink(n); }
+        |
+        |void plain(int n) { byval(n); sink(n); }
+        |void variadic(int n) { var(1, n); sink(n); }
+        |void member(S s, int n) { s.m(n); sink(n); }
+        |void reference(int n) { byref(n); sink(n); }
+        |void templated(int n) { tmpl(n); sink(n); }
+        |void unresolved(int n) { undeclared(n); sink(n); }
+        |void alsoByReference(int n) { byref(n); byval(n); sink(n); }
+        |void boundReference(int n) { int& r = n; byval(n); sink(n); }
+        |void captured(int n) { auto l = [&]() { n++; }; byval(n); l(); sink(n); }
         |""".stripMargin,
       s"Test0${FileDefaults.CppExt}"
     )
 
-    "keep the definition, since the parameter may be a reference" in {
-      definedBy(cpg, "byref", "inc", "n") should not be empty
+    "not be a definition by a call whose parameter is a scalar, or that takes it through `...`" in {
+      definedBy(cpg, "plain", "byval", "n") shouldBe empty
+      definedBy(cpg, "variadic", "var", "n") shouldBe empty
+      definedBy(cpg, "member", "m", "n") shouldBe empty
+    }
+
+    "keep the definition when the parameter may be a reference" in {
+      definedBy(cpg, "reference", "byref", "n") should not be empty
+      definedBy(cpg, "templated", "tmpl", "n") should not be empty
+      definedBy(cpg, "unresolved", "undeclared", "n") should not be empty
+    }
+
+    "keep the definition when the variable may be bound to a reference elsewhere in the method" in {
+      definedBy(cpg, "alsoByReference", "byval", "n") should not be empty
+      definedBy(cpg, "boundReference", "byval", "n") should not be empty
+      definedBy(cpg, "captured", "byval", "n") should not be empty
     }
   }
 
