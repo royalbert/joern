@@ -1,7 +1,14 @@
 package io.joern.dataflowengineoss.passes.reachingdef
 
 import io.shiftleft.codepropertygraph.generated.nodes.*
-import io.shiftleft.codepropertygraph.generated.{Cpg, DispatchTypes, EdgeTypes, Languages, Operators}
+import io.shiftleft.codepropertygraph.generated.{
+  Cpg,
+  DispatchTypes,
+  EdgeTypes,
+  EvaluationStrategies,
+  Languages,
+  Operators
+}
 import io.shiftleft.semanticcpg.language.*
 import io.shiftleft.semanticcpg.utils.MemberAccess.{isFieldAccess, isGenericMemberAccessName}
 import org.slf4j.{Logger, LoggerFactory}
@@ -215,7 +222,7 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
     method.call.filterNot(call => isFieldAccess(call.name)).l
 
   /** The definitions `call` generates: its own, and its identifier and call arguments' unless it is a ternary or the
-    * argument is a C scalar the call receives by value.
+    * argument is a scalar the call receives by value.
     */
   private[reachingdef] def definitionsOf(call: Call): List[Definition] = {
     val retVal = List(call)
@@ -229,14 +236,17 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
     }
   }
 
-  /** C passes every argument by value, so a function cannot write a variable of the caller that is passed to it by
-    * name. That holds for a scalar local or parameter of this method whose address is never taken; a pointer, an array,
-    * a struct, a global or an address-taken variable can still be written through. Operators (named `<operator>.*` or
-    * `<operators>.*`) keep their semantics and macros may assign their arguments, so only calls of functions qualify.
-    * c2cpg parses a `.c` file as C, so the rule applies to methods of `.c` files only.
+  /** A function cannot write a variable of the caller that it receives by value. That holds for a scalar local or
+    * parameter of this method whose address is never taken; a pointer, an array, a struct, a global or an address-taken
+    * variable can still be written through. Operators (named `<operator>.*` or `<operators>.*`) keep their semantics
+    * and macros may assign their arguments, so only calls of functions qualify.
+    *
+    * c2cpg parses a `.c` file as C, where every argument is passed by value. In any other file of a C or C++ graph a
+    * parameter may be a reference, so the variable must not be bound to a reference anywhere in the method: every
+    * function it is passed to takes it by value.
     */
   private def isScalarPassedByValue(call: Call, argument: Expression): Boolean =
-    isCMethod && !call.name.startsWith("<operator") && call.dispatchType != DispatchTypes.INLINED && (argument match {
+    isCFamilyMethod && isFunctionCall(call) && (argument match {
       case identifier: Identifier =>
         identifier.refsTo.nextOption().exists {
           case local: Local             => isScalarOfThisMethod(local, local.typeFullName)
@@ -246,14 +256,59 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
       case _ => false
     })
 
+  private def isFunctionCall(call: Call): Boolean =
+    !call.name.startsWith("<operator") && call.dispatchType != DispatchTypes.INLINED
+
   private def isScalarOfThisMethod(declaration: Declaration, typeFullName: String): Boolean =
-    ownDeclarations.contains(declaration) && !addressTaken.contains(declaration) && isScalarType(typeFullName)
+    ownDeclarations.contains(declaration) && !addressTaken.contains(declaration) &&
+      (isCMethod || !boundToReference.contains(declaration)) && isScalarType(typeFullName)
+
+  /** Whether every method `call` may call takes `argument` as a parameter of scalar type, or through `...`. A
+    * reference, a template parameter or an unresolved callee does not qualify.
+    */
+  private def receivesScalarByValue(call: Call, argument: Expression): Boolean =
+    argument.argumentIndex > 0 && {
+      val callees = call._callOut.collectAll[Method].l
+      callees.nonEmpty && callees.forall { callee =>
+        val parameters = callee.parameter.l
+        parameters.find(_.index == argument.argumentIndex) match {
+          case Some(parameter) => parameter.isVariadic || isScalarType(parameter.typeFullName)
+          case None            => parameters.exists(_.isVariadic)
+        }
+      }
+    }
+
+  private lazy val isCFamilyMethod: Boolean =
+    Cpg(method.graph).metaData.language.headOption.exists(language =>
+      language == Languages.NEWC || language == Languages.C
+    )
 
   private lazy val isCMethod: Boolean =
-    method.filename.endsWith(".c") &&
-      Cpg(method.graph).metaData.language.headOption.exists(language =>
-        language == Languages.NEWC || language == Languages.C
-      )
+    isCFamilyMethod && method.filename.endsWith(".c")
+
+  /** The variables of this method that may be bound to a reference: passed to a function that does not receive them by
+    * value, captured by reference, or initializing a reference.
+    */
+  private lazy val boundToReference: Set[Declaration] = {
+    val passed = method.call.filter(isFunctionCall).flatMap { call =>
+      call.argument.isIdentifier.filterNot(receivesScalarByValue(call, _))
+    }
+    val captured = method.ast.isMethodRef._closureBindingViaCaptureOut
+      .filter(_.evaluationStrategy == EvaluationStrategies.BY_REFERENCE)
+      .flatMap(_._refOut)
+      .collect { case declaration: Declaration => declaration }
+    val initializing = method.call
+      .nameExact(Operators.assignment)
+      .filter { assignment =>
+        assignment.argumentOption(1).exists {
+          case target: Identifier => target.typeFullName.endsWith("&")
+          case _                  => false
+        }
+      }
+      .flatMap(_.argumentOption(2))
+      .flatMap(_.ast.isIdentifier)
+    (passed ++ initializing).refsTo.toSet ++ captured
+  }
 
   /** The locals and parameters of this method. A local with a closure binding stands for a variable of an enclosing
     * scope, such as a global.
