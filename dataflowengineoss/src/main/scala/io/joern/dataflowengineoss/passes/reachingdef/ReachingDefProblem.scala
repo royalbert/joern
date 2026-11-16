@@ -225,13 +225,17 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
   private def definingCalls(method: Method): List[Call] =
     method.call.filterNot(call => isFieldAccess(call.name)).l
 
-  /** The definitions `call` generates: its own, and its identifier and call arguments' unless it is a ternary. */
+  private lazy val byValueArguments = new ByValueArguments(method)
+
+  /** The definitions `call` generates: its own, and its identifier and call arguments' unless it is a ternary or the
+    * callee receives the argument by value (see [[ByValueArguments]]).
+    */
   private[reachingdef] def definitionsOf(call: Call): List[Definition] = {
     val retVal = List(call)
     // Ternary only reads its operands; gen on args kills prior defs.
     val args =
       if (isReadOnlyShortCircuitOperator(call)) Iterator.empty
-      else call.argument.filter(hasValidGenType)
+      else call.argument.filter(hasValidGenType).filterNot(byValueArguments.isPassedByValue(call, _))
     (retVal ++ args).collect {
       case node if nodeToNumber.contains(node) =>
         Definition.fromNode(node.asInstanceOf[CfgNode], nodeToNumber)
