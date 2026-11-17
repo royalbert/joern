@@ -145,14 +145,14 @@ class MethodTests extends C2CpgSuite {
       param1.order shouldBe 1
       param1.code shouldBe "int x"
       param1.name shouldBe "x"
-      param1.evaluationStrategy shouldBe EvaluationStrategies.BY_VALUE
+      param1.evaluationStrategy shouldBe EvaluationStrategies.BY_COPY
       param1.lineNumber shouldBe Option(2)
       param1.columnNumber shouldBe Option(9)
 
       param2.order shouldBe 2
       param2.code shouldBe "int y"
       param2.name shouldBe "y"
-      param2.evaluationStrategy shouldBe EvaluationStrategies.BY_VALUE
+      param2.evaluationStrategy shouldBe EvaluationStrategies.BY_COPY
       param2.lineNumber shouldBe Option(2)
       param2.columnNumber shouldBe Option(16)
     }
