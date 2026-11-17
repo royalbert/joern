@@ -118,6 +118,8 @@ trait MacroHandler { this: AstCreator =>
     callAst(callNode_, argAsts)
   }
 
+  /** The parameters are `BY_REFERENCE`: a macro's expansion may assign an argument, as `#define RESET(x) x = 0` does.
+    */
   private def createMacroMethodStub(
     name: String,
     fullName: String,
@@ -148,7 +150,7 @@ trait MacroHandler { this: AstCreator =>
         code = nameAndCode,
         index = index,
         isVariadic = false,
-        evaluationStrategy = EvaluationStrategies.BY_VALUE,
+        evaluationStrategy = EvaluationStrategies.BY_REFERENCE,
         lineNumber = lineNumber,
         columnNumber = columnNumber,
         typeFullName = Defines.Any

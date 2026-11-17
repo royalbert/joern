@@ -1,4 +1,4 @@
-val cpgVersion = "1.7.79"
+val cpgVersion = "1.7.79+1-99cff522"
 
 lazy val joerncli          = Projects.joerncli
 lazy val querydb           = Projects.querydb
