@@ -532,11 +532,17 @@ trait AstForTypesCreator { this: AstCreator =>
     }
   }
 
-  private def enumeratorTypeName(enumerator: IASTEnumerationSpecifier.IASTEnumerator): String = {
+  /** An enumerator is typed with its enum's type, `enumTypeFullName`, which is how a variable declared with the enum is
+    * typed, or with the base type a C++ enum gives.
+    */
+  private def enumeratorTypeName(
+    enumerator: IASTEnumerationSpecifier.IASTEnumerator,
+    enumTypeFullName: String
+  ): String = {
     enumerator.getParent match {
       case enumeration: ICPPASTEnumerationSpecifier if enumeration.getBaseType != null =>
         enumeration.getBaseType.toString
-      case _ => typeFor(enumerator)
+      case _ => enumTypeFullName
     }
   }
 
@@ -554,7 +560,8 @@ trait AstForTypesCreator { this: AstCreator =>
     enumerator.getParent match {
       case enumeration: IASTEnumerationSpecifier =>
         enumTypeNamesFromDeclaration(enumeration).map { case (typeName, typeFullName) =>
-          EnumMemberNames(typeName, registerType(typeFullName), registerType(enumeratorTypeName(enumerator)))
+          val enumTypeFullName = registerType(typeFullName)
+          EnumMemberNames(typeName, enumTypeFullName, registerType(enumeratorTypeName(enumerator, enumTypeFullName)))
         }
       case _ => None
     }
@@ -602,7 +609,7 @@ trait AstForTypesCreator { this: AstCreator =>
     enumTypeName: String,
     enumTypeFullName: String
   ): Ast = {
-    val tpe    = enumeratorTypeName(enumerator)
+    val tpe    = enumeratorTypeName(enumerator, enumTypeFullName)
     val member =
       memberNode(enumerator, ASTStringUtil.getSimpleName(enumerator.getName), code(enumerator), registerType(tpe))
     safeGetBinding(enumerator.getName).foreach(binding =>

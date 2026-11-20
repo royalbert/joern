@@ -102,6 +102,19 @@ class EnumReferenceTests extends C2CpgSuite {
       cpg.method.nameExact("one").ast.isCall.nameExact(Operators.fieldAccess).referencedMember.l shouldBe first
       cpg.method.nameExact("two").ast.isCall.nameExact(Operators.fieldAccess).referencedMember.l shouldBe second
     }
+
+    "be typed with their enum's type" in {
+      val cpg = code("""
+        |enum color { RED, GREEN };
+        |typedef enum { MODE_A, MODE_B } mode_t2;
+        |int f(enum color c, mode_t2 m) { return c == GREEN && m == MODE_B; }
+        |""".stripMargin)
+      cpg.member.nameExact("RED", "GREEN").typeFullName.l shouldBe List("color", "color")
+      cpg.member.nameExact("MODE_A", "MODE_B").typeFullName.l shouldBe List("mode_t2", "mode_t2")
+      cpg.call.nameExact(Operators.fieldAccess).codeExact("GREEN").typeFullName.l shouldBe List("color")
+      cpg.call.nameExact(Operators.fieldAccess).codeExact("MODE_B").typeFullName.l shouldBe List("mode_t2")
+      cpg.parameter.nameExact("c", "m").typeFullName.l shouldBe List("color", "mode_t2")
+    }
   }
 }
 
@@ -127,6 +140,43 @@ class CppEnumReferenceTests extends C2CpgSuite(fileSuffix = FileDefaults.CppExt)
         access.referencedMember.l shouldBe List(blue)
       }
       cpg.call.nameExact(Operators.addition).argument(1).isCall.referencedMember.l shouldBe List(red)
+    }
+
+    "link qualified C++ enum uses to the members of their enum" in {
+      val cpg = code(
+        """
+          |class AesCcm {
+          | public:
+          |  enum Mode { kEncrypt, kDecrypt };
+          |};
+          |""".stripMargin,
+        "aes.hpp"
+      ).moreCode(
+        """
+          |#include "aes.hpp"
+          |namespace net { enum class Op { kRead, kWrite }; }
+          |int mode() { return AesCcm::kEncrypt; }
+          |int op() { return static_cast<int>(net::Op::kWrite); }
+          |""".stripMargin,
+        "aes.cpp"
+      )
+      val encrypt = cpg.member.nameExact("kEncrypt").l
+      val write   = cpg.member.nameExact("kWrite").l
+      encrypt.typeDecl.fullName.l shouldBe List("AesCcm.Mode")
+
+      inside(cpg.method.nameExact("mode").ast.isCall.nameExact(Operators.fieldAccess).l) { case List(access: Call) =>
+        access.code shouldBe "AesCcm::kEncrypt"
+        inside(access.argument.l) { case List(base: TypeRef, field: FieldIdentifier) =>
+          base.typeFullName shouldBe "AesCcm.Mode"
+          field.canonicalName shouldBe "kEncrypt"
+        }
+        access.referencedMember.l shouldBe encrypt
+      }
+      inside(cpg.method.nameExact("op").ast.isCall.nameExact(Operators.fieldAccess).l) { case List(access: Call) =>
+        access.code shouldBe "net::Op::kWrite"
+        access.argument(1).isTypeRef.typeFullName.l shouldBe List("net.Op")
+        access.referencedMember.l shouldBe write
+      }
     }
   }
 }

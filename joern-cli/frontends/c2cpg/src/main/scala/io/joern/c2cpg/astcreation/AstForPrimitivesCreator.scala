@@ -373,7 +373,18 @@ trait AstForPrimitivesCreator { this: AstCreator =>
     Ast(typeRefNode(lastQualifier, codeStr, registerType(fullName)))
   }
 
+  /** A qualified reference to an enumerator (`AesCcm::kEncrypt`, `Mode::kEncrypt`) is lowered as an unqualified one, on
+    * the enumerator's own enum: its last qualifier can name a class or namespace around the enum, which has no such
+    * member.
+    */
   protected def astForQualifiedName(qualId: CPPASTQualifiedName): Ast = {
+    val lastName = qualId.getLastName.toString
+    maybeAstForEnumMemberAccess(qualId, lastName)
+      .orElse(maybeAstForIncludedEnumMemberAccess(qualId, lastName))
+      .getOrElse(astForQualifiedNameNotEnumerator(qualId))
+  }
+
+  private def astForQualifiedNameNotEnumerator(qualId: CPPASTQualifiedName): Ast = {
     safeGetBinding(qualId) match {
       case Some(function: ICPPFunction) =>
         val name      = qualId.getLastName.toString
