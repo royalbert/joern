@@ -57,6 +57,25 @@ class ConditionalOperatorDataflowTests extends DataFlowCodeToCpgSuite {
     }
   }
 
+  "GNU conditional with omitted middle operand" should {
+    val cpg = code("""
+        |int source(void);
+        |void sink(int v);
+        |void foo(int d) {
+        |  int a = source();
+        |  int x = a ?: d;
+        |  sink(x);
+        |}""".stripMargin)
+
+    "find flow from the condition to the result" in {
+      val source = cpg.call.nameExact("source")
+      val sink   = cpg.call.nameExact("sink").argument
+      sink.reachableByFlows(source).map(flowToResultPairs).toSetMutable shouldBe Set(
+        List(("source()", 5), ("a = source()", 5), ("a ?: d", 6), ("x = a ?: d", 6), ("sink(x)", 7))
+      )
+    }
+  }
+
   "Logical AND short-circuit condition use" should {
     val cpg = code("""
         |int main(int argc, char **argv) {

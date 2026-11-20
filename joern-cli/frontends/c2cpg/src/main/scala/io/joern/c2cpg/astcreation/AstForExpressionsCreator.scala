@@ -503,15 +503,17 @@ trait AstForExpressionsCreator { this: AstCreator =>
   }
 
   private def astForConditionalExpression(expr: IASTConditionalExpression): Ast = {
-    val name = Operators.conditional
-    val call =
+    // GNU `a ?: b` omits the positive result: its value is `a`, evaluated once, so it is an elvis call
+    val isElvis = expr.getPositiveResultExpression == null
+    val name    = if (isElvis) Operators.elvis else Operators.conditional
+    val call    =
       callNode(expr, code(expr), name, name, DispatchTypes.STATIC_DISPATCH, None, Some(Defines.Any))
 
     val condAst = nullSafeAst(expr.getLogicalConditionExpression)
     val posAst  = nullSafeAst(expr.getPositiveResultExpression)
     val negAst  = nullSafeAst(expr.getNegativeResultExpression)
 
-    val children = List(condAst, posAst, negAst)
+    val children = if (isElvis) List(condAst, negAst) else List(condAst, posAst, negAst)
     callAst(call, children)
   }
 
