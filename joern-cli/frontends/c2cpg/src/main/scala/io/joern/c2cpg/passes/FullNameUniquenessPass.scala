@@ -84,9 +84,8 @@ class FullNameUniquenessPass(cpg: Cpg) extends CpgPass(cpg) {
 
   /** Orders methods sharing a fullName so that one with a body comes first and keeps the canonical fullName.
     *
-    * Both arms of an `#ifdef`/`#else` reach the CPG under the same fullName because we parse inactive code, and only
-    * the active arm has a body. Ordering by location alone hands the canonical fullName to whichever arm comes first in
-    * the file, which leaves calls resolved to a method with no body.
+    * Ordering by location alone hands the canonical fullName to whichever method comes first, which can leave calls
+    * resolved to a method with no body.
     */
   private def sortMethodsPreferringDefinitions(methods: List[Method]): List[Method] = {
     val (definitions, declarations) = sortNodesByLocation(methods).partition(_.block.astChildren.nonEmpty)

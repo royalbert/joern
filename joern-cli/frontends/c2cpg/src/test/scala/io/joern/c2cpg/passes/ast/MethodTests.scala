@@ -274,6 +274,42 @@ class MethodTests extends C2CpgSuite {
 
   }
 
+  "A function defined in both branches of an #ifdef" should {
+    "have one method, the definition from the active branch" in {
+      val cpg = code("""
+        |#ifdef FEATURE
+        |int f(void) { return 1; }
+        |#else
+        |int f(void) { return 2; }
+        |#endif
+        |int g(void) { return f(); }
+        |""".stripMargin)
+      val List(f) = cpg.method.nameExact("f").l
+      f.fullName shouldBe "f"
+      f.lineNumber shouldBe Some(5)
+      f.block.astChildren.size shouldBe 1
+      cpg.call.nameExact("f").callee(NoResolve).l shouldBe List(f)
+    }
+
+    "have one method and no unknown node when its class is not declared" in {
+      val cpg = code(
+        """
+        |#ifdef FEATURE
+        |int Undeclared::m() { return 1; }
+        |#else
+        |int Undeclared::m() { return 2; }
+        |#endif
+        |""".stripMargin,
+        "test.cpp"
+      )
+      val List(m) = cpg.method.nameExact("m").l
+      m.fullName shouldBe "Undeclared.m:int()"
+      m.lineNumber shouldBe Some(5)
+      m.block.astChildren.size shouldBe 1
+      cpg.unknown shouldBe empty
+    }
+  }
+
   "Static modifier for methods" should {
     "be correct" in {
       val cpg = code(

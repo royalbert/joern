@@ -140,24 +140,28 @@ class FullNameUniquenessPassTests extends C2CpgSuite {
       val cpg = code(
         """
           |void sink(char c);
-          |#ifdef USE_SAFE
-          |void handle(char* s, int n) { char b[4]; if (n < 4) { sink(b[n]); } }
-          |#else
+          |__attribute__((weak)) void handle(char* s, int n) {}
+          |""".stripMargin,
+        "a.c"
+      ).moreCode(
+        """
+          |void sink(char c);
           |void handle(char* s, int n) { char b[4]; sink(b[n]); }
-          |#endif
+          |""".stripMargin,
+        "b.c"
+      ).moreCode(
+        """
+          |void handle(char* s, int n);
           |void caller(char* s) { handle(s, 99); }
           |""".stripMargin,
         "main.c"
       )
       cpg.method.fullName.size shouldBe cpg.method.fullName.toSet.size
       val List(defined) = cpg.method.fullNameExact("handle").l
-      defined.lineNumber shouldBe Some(6)
+      defined.filename shouldBe "b.c"
       defined.block.astChildren.size shouldBe 3
-      val List(inactive) = cpg.method.fullNameExact("handle<duplicate>0").l
-      inactive.lineNumber shouldBe Some(4)
-      inactive.block.astChildren.size shouldBe 0
       val List(resolved) = cpg.call.nameExact("handle").staticCallOut.l
-      resolved.lineNumber shouldBe Some(6)
+      resolved.filename shouldBe "b.c"
     }
   }
 

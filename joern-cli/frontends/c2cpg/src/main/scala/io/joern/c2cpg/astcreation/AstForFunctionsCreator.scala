@@ -102,7 +102,25 @@ trait AstForFunctionsCreator { this: AstCreator =>
 
   }
 
+  /** A function defined behind a disabled preprocessor define is handled like a declaration.
+    *
+    * We parse inactive code, and CDT skips the bodies there, so such a definition carries no more than its declarator.
+    * As a declaration it becomes a method stub only if no definition of the same fullName exists. One whose name does
+    * not resolve to a function, such as a member of a class that is declared only in code that is not compiled, gives
+    * nothing.
+    */
   protected def astForFunctionDefinition(funcDef: IASTFunctionDefinition): Ast = {
+    if (funcDef.isActive) {
+      astForActiveFunctionDefinition(funcDef)
+    } else {
+      safeGetBinding(funcDef.getDeclarator.getName) match {
+        case Some(_: IFunction) => astForFunctionDeclarator(funcDef.getDeclarator)
+        case _                  => Ast()
+      }
+    }
+  }
+
+  private def astForActiveFunctionDefinition(funcDef: IASTFunctionDefinition): Ast = {
     val filename                                                  = fileName(funcDef)
     val MethodFullNameInfo(name, fullName, signature, returnType) = methodFullNameInfo(funcDef)
     registerMethodDefinition(fullName)
