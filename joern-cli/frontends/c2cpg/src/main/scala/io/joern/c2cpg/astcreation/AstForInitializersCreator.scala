@@ -25,27 +25,18 @@ import scala.util.Try
 trait AstForInitializersCreator { this: AstCreator =>
 
   protected def astForInitializerList(list: IASTInitializerList): Ast = {
-    val MAX_INITIALIZERS = 1000
-    val op               = Operators.arrayInitializer
-    val initCallNode     =
+    val op           = Operators.arrayInitializer
+    val initCallNode =
       callNode(list, code(list), op, op, DispatchTypes.STATIC_DISPATCH, None, Some(Defines.Any))
-    val clauses = list.getClauses.slice(0, MAX_INITIALIZERS)
-    val entries = objectOf(list).map(placements(list, _)).getOrElse(Nil)
-    val args    = clauses.toList.zipWithIndex.map { case (entry, i) =>
+    val entries = objectOf(list).map(placements(list, _)).getOrElse(Vector.empty)
+    val args    = list.getClauses.toList.zipWithIndex.map { case (entry, i) =>
       entries.lift(i).flatten match {
         case Some(Placement(target, MemberSlot(field))) if field.getName.nonEmpty =>
           positionalEntryAst(target, entry, field)
         case _ => astForNode(entry)
       }
     }
-    val ast = callAst(initCallNode, args)
-    if (list.getClauses.length > MAX_INITIALIZERS) {
-      val placeholder =
-        literalNode(list, "<too-many-initializers>", Defines.Any).argumentIndex(MAX_INITIALIZERS)
-      ast.withChild(Ast(placeholder)).withArgEdge(initCallNode, placeholder)
-    } else {
-      ast
-    }
+    callAst(initCallNode, args)
   }
 
   protected def astForCPPASTConstructorInitializer(c: ICPPASTConstructorInitializer): Ast = {
@@ -165,7 +156,7 @@ trait AstForInitializersCreator { this: AstCreator =>
     }
 
   private val initializedObjects = mutable.HashMap.empty[IASTInitializerList, Option[InitializedObject]]
-  private val entryPlacements    = mutable.HashMap.empty[IASTInitializerList, List[Option[Placement]]]
+  private val entryPlacements    = mutable.HashMap.empty[IASTInitializerList, Vector[Option[Placement]]]
 
   private def objectOfUncached(list: IASTInitializerList): Option[InitializedObject] = list.getParent match {
     case eq: IASTEqualsInitializer =>
@@ -334,13 +325,13 @@ trait AstForInitializersCreator { this: AstCreator =>
     * the object's own, the entries go on with its members. Positional entries of a union, which set its first member
     * only, are left out.
     */
-  private def placements(list: IASTInitializerList, filled: InitializedObject): List[Option[Placement]] =
+  private def placements(list: IASTInitializerList, filled: InitializedObject): Vector[Option[Placement]] =
     entryPlacements.get(list) match {
       case Some(known) => known
       case None        => val found = placementsUncached(list, filled); entryPlacements.put(list, found); found
     }
 
-  private def placementsUncached(list: IASTInitializerList, filled: InitializedObject): List[Option[Placement]] =
+  private def placementsUncached(list: IASTInitializerList, filled: InitializedObject): Vector[Option[Placement]] =
     list.getClauses.toList
       .foldLeft((frameOf(filled).toList, List.empty[Option[Placement]])) { case ((cursor, acc), entry) =>
         val (placement, next) = designators(entry) match {
@@ -351,6 +342,7 @@ trait AstForInitializersCreator { this: AstCreator =>
       }
       ._2
       .reverse
+      .toVector
 
   /** A position in the elements of `obj`, an object an initializer list fills: the element at `index` is the next one.
     * A union takes one element.

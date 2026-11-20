@@ -2078,6 +2078,18 @@ class AstCreationPassTests extends AstC2CpgSuite {
       }
     }
 
+    "be correct for array init with more than 1000 entries" in {
+      val zeros = List.fill(1001)("0").mkString(", ")
+      val cpg   = code(s"""
+        |void f(void) {}
+        |void (*x[])(void) = {$zeros, f};
+        |""".stripMargin)
+      val List(call) = cpg.call.nameExact(Operators.arrayInitializer).l
+      call.argument.argumentIndex.l.sorted shouldBe (1 to 1002).toList
+      call.argument.isMethodRef.methodFullName.l shouldBe List("f")
+      cpg.literal.codeExact("<too-many-initializers>") shouldBe empty
+    }
+
     "be correct for array init with method refs" in {
       val cpg = code("""
         |static void methodA() { return; };
