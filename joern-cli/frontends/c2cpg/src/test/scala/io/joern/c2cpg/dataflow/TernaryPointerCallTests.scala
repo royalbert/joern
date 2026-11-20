@@ -82,6 +82,21 @@ class TernaryPointerCallTests extends DataFlowCodeToCpgSuite {
     }
   }
 
+  "pointer call through a GNU conditional with omitted middle operand" should {
+    val cpg = code("""
+        |void fallback(int value) {}
+        |
+        |void caller(void (*f)(int)) {
+        |  (f ?: fallback)(1);
+        |}
+      """.stripMargin)
+
+    "link the call to the function the receiver names" in {
+      val List(call) = cpg.call.codeExact("(f ?: fallback)(1)").l
+      call._callOut.cast[Method].name.toSetMutable shouldBe Set("fallback")
+    }
+  }
+
   "chained calls after ternary function designator" should {
     "not link method references from inner receiver expressions in chained calls" in {
       val cpg = code(

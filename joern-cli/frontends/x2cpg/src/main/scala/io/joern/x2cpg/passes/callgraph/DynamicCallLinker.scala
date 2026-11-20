@@ -176,6 +176,8 @@ class DynamicCallLinker(cpg: Cpg) extends CpgPass(cpg) {
     case m: MethodRef                               => Iterator(m)
     case c: Call if c.name == Operators.conditional =>
       (c.argumentOption(2).iterator ++ c.argumentOption(3).iterator).flatMap(unpackMethodRefs)
+    case c: Call if c.name == Operators.elvis =>
+      c.argument.flatMap(unpackMethodRefs)
     case c: Call if c.name == Operators.cast =>
       c.argumentOption(2).iterator.flatMap(unpackMethodRefs)
     case c: Call if c.name == Operators.addressOf =>
