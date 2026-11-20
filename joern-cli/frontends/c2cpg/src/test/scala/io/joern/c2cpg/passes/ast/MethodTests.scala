@@ -472,6 +472,35 @@ class MethodTests extends C2CpgSuite {
       method.fullName shouldBe "method"
     }
 
+    "be correct for a (void) parameter list" in {
+      val cpg = code(
+        """
+          |int cproto(void);
+          |int cdef(void) { return cproto(); }
+          |""".stripMargin,
+        "test.c"
+      ).moreCode(
+        """
+          |int cppdef(void) { return 1; }
+          |class Inst {
+          |  public:
+          |    template <typename T> T &get(void);
+          |};
+          |template <> int &Inst::get(void) { static int value; return value; }
+          |int caller(Inst &inst) { return cppdef() + inst.get<int>(); }
+          |""".stripMargin,
+        "test.cpp"
+      )
+      cpg.method.nameExact("cproto", "cdef", "cppdef").parameter.l shouldBe empty
+      cpg.method.nameExact("cproto", "cdef").signature.l shouldBe List("int()", "int()")
+      val List(cppdef) = cpg.method.nameExact("cppdef").l
+      cppdef.fullName shouldBe "cppdef:int()"
+      val List(get) = cpg.method.fullNameExact("Inst.get:int&()").l
+      get.isExternal shouldBe false
+      get.parameter.name.l shouldBe List(Defines.This)
+      cpg.call.nameExact("get").callee(NoResolve).l shouldBe List(get)
+    }
+
     "be correct for C++ method with long int types" in {
       val cpg = code(
         """

@@ -25,8 +25,8 @@ trait AstForFunctionsCreator { this: AstCreator =>
     @scala.annotation.tailrec
     def collect(node: IASTNode, acc: Vector[IASTNode]): Vector[IASTNode] = node match {
       case arr: IASTArrayDeclarator        => collect(arr.getNestedDeclarator, acc)
-      case decl: CPPASTFunctionDeclarator  => collect(decl.getNestedDeclarator, acc ++ decl.getParameters.toIndexedSeq)
-      case decl: CASTFunctionDeclarator    => collect(decl.getNestedDeclarator, acc ++ decl.getParameters.toIndexedSeq)
+      case decl: CPPASTFunctionDeclarator  => collect(decl.getNestedDeclarator, acc ++ declaredParameters(decl))
+      case decl: CASTFunctionDeclarator    => collect(decl.getNestedDeclarator, acc ++ declaredParameters(decl))
       case defn: IASTFunctionDefinition    => collect(defn.getDeclarator, acc)
       case lambda: ICPPASTLambdaExpression => collect(lambda.getDeclarator, acc)
       case knr: ICASTKnRFunctionDeclarator => acc ++ knr.getParameterDeclarations.toIndexedSeq
@@ -35,6 +35,25 @@ trait AstForFunctionsCreator { this: AstCreator =>
       case null                            => acc
     }
     collect(functionNode, Vector.empty)
+  }
+
+  /** The parameters of `decl`. A list that is only an unnamed `void`, as in `int f(void)`, declares no parameters. */
+  private def declaredParameters(decl: IASTStandardFunctionDeclarator): Seq[IASTParameterDeclaration] = {
+    decl.getParameters.toIndexedSeq match {
+      case Seq(param) if isVoidParameter(param) => Seq.empty
+      case params                               => params
+    }
+  }
+
+  private def isVoidParameter(param: IASTParameterDeclaration): Boolean = {
+    (param.getDeclSpecifier, param.getDeclarator) match {
+      case (spec: IASTSimpleDeclSpecifier, declarator) =>
+        spec.getType == IASTSimpleDeclSpecifier.t_void && !spec.isConst && !spec.isVolatile &&
+        !declarator.isInstanceOf[IASTArrayDeclarator] && !declarator.isInstanceOf[IASTFunctionDeclarator] &&
+        declarator.getPointerOperators.isEmpty && declarator.getNestedDeclarator == null &&
+        ASTStringUtil.getSimpleName(declarator.getName).isEmpty
+      case _ => false
+    }
   }
 
   @tailrec
