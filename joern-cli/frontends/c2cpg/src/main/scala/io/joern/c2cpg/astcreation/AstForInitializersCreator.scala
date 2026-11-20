@@ -157,6 +157,7 @@ trait AstForInitializersCreator { this: AstCreator =>
 
   private val initializedObjects = mutable.HashMap.empty[IASTInitializerList, Option[InitializedObject]]
   private val entryPlacements    = mutable.HashMap.empty[IASTInitializerList, Vector[Option[Placement]]]
+  private val clausePositions    = mutable.HashMap.empty[IASTInitializerList, Map[IASTInitializerClause, Int]]
 
   private def objectOfUncached(list: IASTInitializerList): Option[InitializedObject] = list.getParent match {
     case eq: IASTEqualsInitializer =>
@@ -169,11 +170,14 @@ trait AstForInitializersCreator { this: AstCreator =>
     case outer: IASTInitializerList               =>
       for {
         filled    <- objectOf(outer)
-        placement <- placements(outer, filled).lift(outer.getClauses.indexWhere(_ eq list)).flatten
+        placement <- placements(outer, filled).lift(positionOf(outer, list)).flatten
         obj       <- objectAt(placement.obj, placement.slot)
       } yield obj
     case parent => designators(parent).flatMap(designatedObject(parent, _, lowerIndexes = false))
   }
+
+  private def positionOf(outer: IASTInitializerList, clause: IASTInitializerClause): Int =
+    clausePositions.getOrElseUpdate(outer, outer.getClauses.zipWithIndex.toMap).getOrElse(clause, -1)
 
   /** The object a compound literal makes, `(struct mux){ .port = 1 }` (C17 6.5.2.5). It has no name, so an expression
     * that names it is a reference to its type, written as the literal's cast, `(struct mux)`: no variable is made up
