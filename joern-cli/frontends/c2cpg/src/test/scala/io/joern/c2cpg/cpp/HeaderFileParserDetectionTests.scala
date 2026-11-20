@@ -71,6 +71,30 @@ class HeaderFileParserDetectionTests extends C2CpgSuite {
       )
     }
 
+    "create no type for the global of a header parsed as C++" in {
+      val cpg = code(
+        """
+          |int utilFunc(int a) { return 0; }
+          |""".stripMargin,
+        "util.h"
+      ).moreCode(
+        """
+          |#include "util.h"
+          |""".stripMargin,
+        "main.c"
+      ).moreCode(
+        """
+          |#include "util.h"
+          |""".stripMargin,
+        "main.cpp"
+      )
+      cpg.typ.nameExact("h") shouldBe empty
+      cpg.typeDecl.nameExact("<global>").fullName.filter(_.startsWith("util.h")).sorted.l shouldBe List(
+        "util.h:<global>",
+        "util.h<cpp>:<global>"
+      )
+    }
+
   }
 
 }

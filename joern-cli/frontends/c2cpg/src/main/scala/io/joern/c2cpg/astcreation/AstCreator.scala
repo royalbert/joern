@@ -6,6 +6,7 @@ import io.joern.c2cpg.passes.AstCreationPass
 import io.joern.x2cpg.{Ast, AstCreatorBase, ValidationMode}
 import io.joern.x2cpg.datastructures.Stack.*
 import io.joern.x2cpg.datastructures.VariableScopeManager
+import io.joern.x2cpg.passes.frontend.MetaDataPass
 import io.joern.x2cpg.utils.OffsetUtils
 import io.shiftleft.codepropertygraph.generated.nodes.*
 import io.shiftleft.codepropertygraph.generated.{DiffGraphBuilder, NodeTypes}
@@ -55,9 +56,9 @@ class AstCreator(
   }
 
   private def astForTranslationUnit(iASTTranslationUnit: IASTTranslationUnit): Ast = {
-    val namespaceBlock               = globalNamespaceBlock()
-    val fakeMethodFullNameWithSuffix = s"${namespaceBlock.fullName}$languageSuffix"
-    namespaceBlock.fullName(fakeMethodFullNameWithSuffix)
+    val namespaceBlock = globalNamespaceBlock()
+    // The suffix goes before `:<global>`: the TypeNodePass creates no TYPE for full names that end in `<global>`
+    namespaceBlock.fullName(MetaDataPass.getGlobalNamespaceBlockFullName(Some(s"$filename$languageSuffix")))
     methodAstParentStack.push(namespaceBlock)
     val translationUnitAst =
       astInFakeMethod(namespaceBlock.fullName, fileName(iASTTranslationUnit), iASTTranslationUnit)
