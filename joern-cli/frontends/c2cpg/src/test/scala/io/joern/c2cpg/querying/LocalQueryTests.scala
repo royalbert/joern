@@ -163,4 +163,40 @@ class LocalQueryTests extends C2CpgSuite {
       id2.lineNumber shouldBe Some(5)
     }
   }
+
+  "local query example 5" should {
+    "find the locals declared in a for-loop header" in {
+      val cpg = code("""
+          |int sum(int n) {
+          |  int s = 0;
+          |  for (int i = 0; i < n; i++) {
+          |    int x = i;
+          |    s += x;
+          |  }
+          |  return s;
+          |}
+          |""".stripMargin)
+      val List(sumMethod) = cpg.method.nameExact("sum").l
+      sumMethod.local.name.l shouldBe List("s", "i", "x")
+    }
+  }
+
+  "local query example 6" should {
+    "find the parameter of a catch clause" in {
+      val cpg = code(
+        """
+          |void foo() {
+          |  try {
+          |    int t = 0;
+          |  } catch (int e) {
+          |    int c = e;
+          |  }
+          |}
+          |""".stripMargin,
+        "test.cpp"
+      )
+      val List(fooMethod) = cpg.method.nameExact("foo").l
+      fooMethod.local.name.l shouldBe List("t", "e", "c")
+    }
+  }
 }

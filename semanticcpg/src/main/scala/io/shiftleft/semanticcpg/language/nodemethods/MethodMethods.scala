@@ -12,8 +12,14 @@ class MethodMethods(val method: Method) extends AnyVal with NodeExtension {
   def annotation: Iterator[Annotation] =
     method._annotationViaAstOut
 
+  /** Traverse to the locals of this method: those declared in its blocks and those declared in a control structure's
+    * header, such as `for (int i = 0; ...)`.
+    */
   def local: Iterator[Local] =
-    method._blockViaContainsOut.local
+    method._containsOut
+      .collect { case node @ (_: Block | _: ControlStructure) => node }
+      ._astOut
+      .collectAll[Local]
 
   def topLevelExpressions: Iterator[Expression] =
     method._astOut
