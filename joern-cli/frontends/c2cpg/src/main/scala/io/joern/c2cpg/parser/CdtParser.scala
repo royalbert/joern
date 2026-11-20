@@ -13,10 +13,11 @@ import org.eclipse.cdt.core.model.ILanguage
 import org.eclipse.cdt.core.parser.{DefaultLogService, FileContent, IncludeFileContentProvider, ScannerInfo}
 import org.slf4j.LoggerFactory
 
-import java.nio.file.{Files, Path, Paths}
+import java.nio.file.{Files, Path}
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 import scala.util.control.NonFatal
+import scala.util.matching.Regex
 
 object CdtParser {
 
@@ -117,9 +118,9 @@ object CdtParser {
 
   private def preprocessedFileIsFromCPPFile(file: Path, code: String, config: Config): Boolean = {
     if (config.withPreprocessedFiles && FileDefaults.hasPreprocessedFileExtension(file.toString)) {
-      val fileWithoutExt  = file.toString.substring(0, file.toString.lastIndexOf("."))
-      val filesWithCPPExt = FileDefaults.CppFileExtensions.map(ext => Paths.get(s"$fileWithoutExt$ext").fileName)
-      code.linesIterator.exists(line => filesWithCPPExt.exists(f => line.contains(s"\"$f\"")))
+      val fileName       = file.fileName
+      val lineMarkerName = s"\"(${Regex.quote(fileName.substring(0, fileName.lastIndexOf(".")))}\\.[^\"./]+)\"".r
+      lineMarkerName.findAllMatchIn(code).exists(marker => FileDefaults.hasCppFileExtension(marker.group(1)))
     } else {
       false
     }

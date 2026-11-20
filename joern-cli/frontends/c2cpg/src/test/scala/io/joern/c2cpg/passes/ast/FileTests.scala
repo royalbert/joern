@@ -141,12 +141,19 @@ class FileTests extends C2CpgSuite {
           |class B {};
           |""".stripMargin,
       "b.i"
+    ).moreCode(
+      """
+          |# 1 "c.C" 1
+          |class C {};
+          |""".stripMargin,
+      "c.i"
     ).withConfig(Config(withPreprocessedFiles = true))
 
     "be parsed correctly" in {
-      cpg.file.nameNot("<includes>", "<unknown>").name.sorted.l shouldBe List("a.i", "b.i")
+      cpg.file.nameNot("<includes>", "<unknown>").name.sorted.l shouldBe List("a.i", "b.i", "c.i")
       cpg.method.nameExact("bar").file.name.l shouldBe List("a.i")
       cpg.typeDecl.nameExact("B").file.name.l shouldBe List("b.i")
+      cpg.typeDecl.nameExact("C").file.name.l shouldBe List("c.i")
     }
 
   }

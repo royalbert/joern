@@ -73,4 +73,29 @@ class FileHandlingTests
 
   }
 
+  "File handling 3" should {
+    val cpg = code(
+      """
+        |#include "a.h"
+        |void A::b() {}
+        |""".stripMargin,
+      "A.C"
+    ).moreCode(
+      """
+        |class A {
+        |  void b();
+        |  void c() {}
+        |};
+        |""".stripMargin,
+      "a.h"
+    )
+
+    "parse an upper-case .C file and the headers it includes as C++" in {
+      cpg.file.name.l should contain("A.C")
+      cpg.method.nameExact("b").fullName.l shouldBe List("A.b:void()")
+      cpg.method.nameExact("c").fullName.l shouldBe List("A.c:void()")
+    }
+
+  }
+
 }

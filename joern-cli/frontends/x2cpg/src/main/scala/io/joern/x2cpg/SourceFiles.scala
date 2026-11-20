@@ -1,6 +1,7 @@
 package io.joern.x2cpg
 
 import io.shiftleft.semanticcpg.utils.FileUtil.*
+import org.apache.commons.lang3.StringUtils
 import org.slf4j.LoggerFactory
 
 import java.io.FileNotFoundException
@@ -197,7 +198,7 @@ object SourceFiles {
   ): List[String] = files.filter(filterFile(_, inputPath, ignoredDefaultRegex, ignoredFilesRegex, ignoredFilesPath))
 
   private def hasSourceFileExtension(file: Path, sourceFileExtensions: Set[String]): Boolean =
-    sourceFileExtensions.exists(ext => file.toString.endsWith(ext))
+    sourceFileExtensions.exists(ext => StringUtils.endsWithIgnoreCase(file.toString, ext))
 
   /** Determines a sorted list of file paths in a directory that match the specified criteria.
     *
