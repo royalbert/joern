@@ -2685,6 +2685,35 @@ class AstCreationPassTests extends AstC2CpgSuite {
       cpg.call.codeExact("k ? o : p[0]").typeFullName.l shouldBe List("out")
     }
 
+    "be correct for field accesses, dereferences, addresses and conditionals in C++" in {
+      val cpg = code(
+        """
+          |typedef unsigned int u32;
+          |struct S { int w; };
+          |namespace ns { struct S { u32 v; S* next; }; }
+          |void f(ns::S s, ns::S* p, S* g, int k) {
+          |  u32 a = s.v;
+          |  ns::S* n = p->next;
+          |  ns::S d = *p;
+          |  S e = *g;
+          |  ns::S* r = &s;
+          |  ns::S c = k ? s : d;
+          |  ns::S arr[3];
+          |  ns::S (*pa)[3] = &arr;
+          |}
+          |""".stripMargin,
+        "test.cpp"
+      )
+      cpg.call.codeExact("s.v").typeFullName.l shouldBe List("u32")
+      cpg.call.codeExact("p->next").typeFullName.l shouldBe List("ns.S*")
+      cpg.call.codeExact("*p").typeFullName.l shouldBe List("ns.S")
+      cpg.call.codeExact("*g").typeFullName.l shouldBe List("S")
+      cpg.call.codeExact("&s").typeFullName.l shouldBe List("ns.S*")
+      cpg.call.codeExact("k ? s : d").typeFullName.l shouldBe List("ns.S")
+      cpg.call.codeExact("&arr").typeFullName.l shouldBe List("ns.S(*)[3]")
+      cpg.local.nameExact("pa").typeFullName.l shouldBe List("ns.S(*)[3]")
+    }
+
     "be consistent with array types" in {
       val cpg = code("""
         |struct x { char z[1]; };

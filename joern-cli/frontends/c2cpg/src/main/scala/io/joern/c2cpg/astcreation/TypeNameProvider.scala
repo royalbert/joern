@@ -155,12 +155,65 @@ trait TypeNameProvider { this: AstCreator =>
     safeCdtCall(safeGetType(expr.getExpressionType)).getOrElse(Defines.Any)
   }
 
-  /** The type of `expr` with the typedef names it is declared with kept (`u32`, not `unsigned int`), the name the
-    * member, variable or element it evaluates to is typed with.
+  /** The type of `expr` with typedef names kept (`u32`, not `unsigned int`). In C++ it is named as c2cpg names declared
+    * types: a field access takes its field's declared type, class, enum and typedef names are qualified (`ns.S*`), and
+    * a type built from anything other than these and basic types is `ANY`.
     */
   private[astcreation] def expressionTypeAsDeclared(expr: IASTExpression): String = {
     // In case of unresolved includes etc. this may fail throwing an unrecoverable exception
-    safeCdtCall(safeGetTypeInternal(expr.getExpressionType, resolveTypedefs = false)).getOrElse(Defines.Any)
+    expr match {
+      case cppExpr: ICPPASTExpression => safeCdtCall(cppTypeAsDeclared(cppExpr)).getOrElse(Defines.Any)
+      case _ => safeCdtCall(safeGetTypeInternal(expr.getExpressionType, resolveTypedefs = false)).getOrElse(Defines.Any)
+    }
+  }
+
+  private def cppTypeAsDeclared(expr: ICPPASTExpression): String = {
+    val tpe = expr match {
+      case fieldRef: ICPPASTFieldReference =>
+        safeGetBinding(fieldRef.getFieldName) match {
+          case Some(field: IField) => field.getType
+          case _                   => fieldRef.getExpressionType
+        }
+      case _ => expr.getExpressionType
+    }
+    if (innermostType(tpe).isInstanceOf[IBasicType]) safeGetTypeInternal(tpe, resolveTypedefs = false)
+    else cppQualifiedTypeName(tpe, "").map(cleanType).getOrElse(Defines.Any)
+  }
+
+  private def innermostType(tpe: IType): IType = tpe match {
+    case _: ICPPPointerToMemberType => tpe
+    case qualifier: IQualifierType  => innermostType(qualifier.getType)
+    case pointer: IPointerType      => innermostType(pointer.getType)
+    case ref: ICPPReferenceType     => innermostType(ref.getType)
+    case array: IArrayType          => innermostType(array.getType)
+    case _                          => tpe
+  }
+
+  /** The name of `tpe` followed by `declarator`, the pointers, references and array dimensions of the types that
+    * contain it, spelled as a declaration spells them: `ns.S(*)[3]` for a pointer to an array of three `ns::S`.
+    */
+  private def cppQualifiedTypeName(tpe: IType, declarator: String): Option[String] = tpe match {
+    case _: ICPPUnknownBinding            => None
+    case _: ICPPPointerToMemberType       => None
+    case basic: IBasicType                => Some(safeGetTypeInternal(basic, resolveTypedefs = false) + declarator)
+    case alias: ICPPAliasTemplateInstance => cppQualifiedTypeName(alias.getType, declarator)
+    case named: ICPPClassType             => qualifiedTypeName(named).map(_ + declarator)
+    case named: ICPPEnumeration           => qualifiedTypeName(named).map(_ + declarator)
+    case named: ICPPBinding if named.isInstanceOf[ITypedef] => qualifiedTypeName(named).map(_ + declarator)
+    case qualifier: IQualifierType                          => cppQualifiedTypeName(qualifier.getType, declarator)
+    case pointer: IPointerType                              => cppQualifiedTypeName(pointer.getType, s"*$declarator")
+    case ref: ICPPReferenceType                             =>
+      cppQualifiedTypeName(ref.getType, (if (ref.isRValueReference) "&&" else "&") + declarator)
+    case array: IArrayType =>
+      val size  = Option(array.getSize).flatMap(value => Option(value.numberValue)).fold("")(_.longValue.toString)
+      val inner = if (declarator.startsWith("*") || declarator.startsWith("&")) s"($declarator)" else declarator
+      cppQualifiedTypeName(array.getType, s"$inner[$size]")
+    case _ => None
+  }
+
+  /** The qualified name of a named type, or `None` for an anonymous one. */
+  private def qualifiedTypeName(named: ICPPBinding): Option[String] = {
+    Option.when(named.getName.nonEmpty)(named.getQualifiedName.mkString("."))
   }
 
   private def safeGetTypeInternal(tpe: IType, resolveTypedefs: Boolean = true): String = {
