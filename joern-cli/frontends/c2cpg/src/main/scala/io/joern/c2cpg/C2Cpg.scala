@@ -41,6 +41,8 @@ class C2Cpg extends X2CpgFrontend {
         report = report
       )
       headerPass.createAndApply()
+      new EnumeratorReferenceLinkerPass(cpg, headerPass.enumeratorMembers(), headerPass.enumeratorReferences())
+        .createAndApply()
 
       TypeNodePass.withRegisteredTypes(headerPass.typesSeen(), cpg).createAndApply()
       new TypeDeclNodePass(cpg, config).createAndApply()

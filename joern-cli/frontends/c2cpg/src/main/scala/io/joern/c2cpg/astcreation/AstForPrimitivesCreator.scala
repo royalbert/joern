@@ -1,7 +1,8 @@
 package io.joern.c2cpg.astcreation
 
+import io.joern.c2cpg.passes.AstCreationPass
 import io.joern.x2cpg.Ast
-import io.shiftleft.codepropertygraph.generated.nodes.{NewMethod, NewMethodRef, NewTypeDecl}
+import io.shiftleft.codepropertygraph.generated.nodes.{NewCall, NewMethod, NewMethodRef, NewTypeDecl}
 import io.shiftleft.codepropertygraph.generated.{DispatchTypes, EvaluationStrategies, Operators}
 import org.apache.commons.lang3.StringUtils
 import org.eclipse.cdt.core.dom.ast.*
@@ -17,7 +18,7 @@ import org.eclipse.cdt.core.dom.ast.cpp.{
   ICPPTemplateTypeParameter
 }
 import org.eclipse.cdt.internal.core.dom.parser.IASTInternalScope
-import org.eclipse.cdt.internal.core.dom.parser.c.{CVariable, ICInternalBinding}
+import org.eclipse.cdt.internal.core.dom.parser.c.{CEnumerator, CVariable, ICInternalBinding}
 import org.eclipse.cdt.internal.core.dom.parser.cpp.*
 import org.eclipse.cdt.internal.core.dom.parser.cpp.semantics.{CPPVisitor, EvalMemberAccess}
 import org.eclipse.cdt.internal.core.model.ASTStringUtil
@@ -27,6 +28,9 @@ import scala.annotation.tailrec
 trait AstForPrimitivesCreator { this: AstCreator =>
 
   import FullNameProvider.stripTemplateTags
+
+  /** The references to other files' enumerators this file registered, so that a copy of one is registered too. */
+  private val enumeratorReferences = new java.util.IdentityHashMap[NewCall, AstCreationPass.EnumeratorReference]()
 
   protected def astForComment(comment: IASTComment): Ast =
     Ast(commentNode(comment, code(comment), fileName(comment)))
@@ -79,7 +83,9 @@ trait AstForPrimitivesCreator { this: AstCreator =>
       case Some(ref) => Ast(ref)
       case None      =>
         val identifierName = nameForIdentifier(ident)
-        maybeAstForEnumMemberAccess(ident, identifierName) match {
+        maybeAstForEnumMemberAccess(ident, identifierName).orElse(
+          maybeAstForIncludedEnumMemberAccess(ident, identifierName)
+        ) match {
           case Some(ast) => ast
           case None      =>
             typeNameForIdentifier(ident, identifierName) match {
@@ -114,6 +120,71 @@ trait AstForPrimitivesCreator { this: AstCreator =>
         callNode(ident, code(ident), op, op, DispatchTypes.STATIC_DISPATCH, None, Some(enumMember.member.typeFullName))
       callAst(access, List(Ast(base), Ast(field))).withRefEdge(access, enumMember.member)
     }
+  }
+
+  /** Enum constant references whose enum another file declares (mostly a header the file includes) are lowered as
+    * [[maybeAstForEnumMemberAccess]] lowers those of the file's own enums. That file's AST creator makes the enum's
+    * member, which this one cannot reach. CDT binds the reference to the enumerator, whose declaration is in the
+    * declaring file: the access names the type that file's AST creator gives the enum, read from that declaration, and
+    * is registered under the place of the declaration, where `EnumeratorReferenceLinkerPass` finds the member.
+    */
+  private def maybeAstForIncludedEnumMemberAccess(ident: IASTNode, identifierName: String): Option[Ast] = {
+    val binding = ident match {
+      case id: IASTIdExpression => safeGetBinding(id)
+      case id: IASTName         => safeGetBinding(id)
+      case _                    => None
+    }
+    for {
+      enumerator <- binding.flatMap(enumeratorDeclaration)
+      if isIncludedNode(enumerator)
+      names <- enumMemberNamesFromDeclaration(enumerator)
+    } yield {
+      val op     = Operators.fieldAccess
+      val base   = typeRefNode(ident, names.typeName, names.typeFullName)
+      val field  = fieldIdentifierNode(ident, identifierName, identifierName)
+      val access =
+        callNode(ident, code(ident), op, op, DispatchTypes.STATIC_DISPATCH, None, Some(names.memberTypeFullName))
+      enumeratorPlace(enumerator).foreach { place =>
+        registerEnumeratorReference(AstCreationPass.EnumeratorReference(access, place, isCppFile))
+      }
+      callAst(access, List(Ast(base), Ast(field)))
+    }
+  }
+
+  private def registerEnumeratorReference(reference: AstCreationPass.EnumeratorReference): Unit = {
+    enumeratorReferences.put(reference.access, reference)
+    accumulator.registerEnumeratorReference(reference)
+  }
+
+  /** Registers the copies in `copies` of the references to other files' enumerators in `original`: a macro call's
+    * arguments are copies (`Ast.subTreeCopy`) of subtrees of its expansion. A copy keeps the code and the position of
+    * its original, and within one expansion a reference with that code at that position is one token of the source, so
+    * it refers to the same enumerator.
+    */
+  protected def registerCopiedEnumeratorReferences(original: Ast, copies: Ast): Unit = {
+    if (!enumeratorReferences.isEmpty) {
+      val originals = original.nodes
+        .collect { case access: NewCall if enumeratorReferences.containsKey(access) => access }
+        .groupBy(access => (access.code, access.lineNumber, access.columnNumber))
+      if (originals.nonEmpty) {
+        copies.nodes.foreach {
+          case copy: NewCall if copy.name == Operators.fieldAccess && !enumeratorReferences.containsKey(copy) =>
+            originals.get((copy.code, copy.lineNumber, copy.columnNumber)).foreach { sameToken =>
+              registerEnumeratorReference(enumeratorReferences.get(sameToken.head).copy(access = copy))
+            }
+          case _ =>
+        }
+      }
+    }
+  }
+
+  private def enumeratorDeclaration(binding: IBinding): Option[IASTEnumerationSpecifier.IASTEnumerator] = {
+    val enumeratorName = binding match {
+      case enumerator: CEnumerator   => Option(enumerator.getPhysicalNode)
+      case enumerator: CPPEnumerator => Option(enumerator.getDefinition)
+      case _                         => None
+    }
+    enumeratorName.map(_.getParent).collect { case declaration: IASTEnumerationSpecifier.IASTEnumerator => declaration }
   }
 
   private def maybeMethodRefForIdentifier(ident: IASTNode): Option[NewMethodRef] = {

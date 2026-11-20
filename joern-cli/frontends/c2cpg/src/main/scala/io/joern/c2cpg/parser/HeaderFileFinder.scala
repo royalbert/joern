@@ -24,6 +24,11 @@ class HeaderFileFinder(config: Config) {
 
   private val findCache = new ConcurrentHashMap[String, Option[String]]()
 
+  /** The header [[find]] returned for the unresolved `path`, if it did. CDT reads that header under `path`, so the
+    * locations of its nodes carry `path`, while the header's own parse carries the header's path.
+    */
+  def substitutedFor(path: String): Option[String] = Option(findCache.get(path)).flatten
+
   /** Given an unresolved header file, given as a non-existing absolute path, determine whether a header file with the
     * same name can be found anywhere in the code base.
     */

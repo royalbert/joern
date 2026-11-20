@@ -42,6 +42,7 @@ trait MacroHandler { this: AstCreator =>
     val macroCallAst  = matchingMacro.map { case (mac, args) => createMacroCallAst(ast, node, mac, args) }
     macroCallAst match {
       case Some(callAst) =>
+        registerCopiedEnumeratorReferences(ast, callAst)
         // We need to wrap the AST as it may contain CPG nodes not being allowed
         // to be connected via AST edges under a CALL. E.g., LOCALs but only if it is not already a BLOCK.
         val childAst = ast.root match {
