@@ -22,8 +22,11 @@ trait AstCreatorHelper { this: AstCreator =>
   private val resolvedInputPath: Path = Paths.get(config.inputPath).toAbsolutePath.normalize()
 
   private val scopeLocalUniqueNames: mutable.Map[String, Int] = mutable.HashMap.empty
-  private val file2OffsetTable: Array[Int]                    = genFileOffsetTable()
+  private val file2OffsetTable: Array[Int]                    = genFileOffsetTable(cdtAst)
   private val relativePathCache: mutable.Map[String, String]  = mutable.HashMap.empty
+
+  /** The line table of the re-parsed text (see `astsForProblemStatement`) whose nodes were last given a column. */
+  private var reparsedOffsetTable: Option[(IASTTranslationUnit, Array[Int])] = None
 
   // We use our own call ast creation function since the version in x2cpg treats
   // base as receiver if no receiver is given which does not fit the needs of this
@@ -103,10 +106,23 @@ trait AstCreatorHelper { this: AstCreator =>
   protected def nullSafeFileLocationLast(node: IASTNode): Option[IASTFileLocation] =
     Option(cdtAst.flattenLocationsToFile(node.getNodeLocations.lastOption.toArray)).map(_.asFileLocation())
 
-  protected def offsetToColumn(offset: Int): Int = {
-    val index           = java.util.Arrays.binarySearch(file2OffsetTable, offset)
+  /** The column of `offset` in the text `node` was parsed from: the file, or a re-parsed text. */
+  protected def offsetToColumn(node: IASTNode, offset: Int): Int = {
+    val offsetTable = node.getTranslationUnit match {
+      case null                                         => file2OffsetTable
+      case translationUnit if translationUnit eq cdtAst => file2OffsetTable
+      case translationUnit                              =>
+        reparsedOffsetTable match {
+          case Some((parsed, table)) if parsed eq translationUnit => table
+          case _                                                  =>
+            val table = genFileOffsetTable(translationUnit)
+            reparsedOffsetTable = Some((translationUnit, table))
+            table
+        }
+    }
+    val index           = java.util.Arrays.binarySearch(offsetTable, offset)
     val tableIndex      = if (index < 0) -(index + 1) else index + 1
-    val lineStartOffset = if (tableIndex == 0) 0 else file2OffsetTable(tableIndex - 1)
+    val lineStartOffset = if (tableIndex == 0) 0 else offsetTable(tableIndex - 1)
     offset - lineStartOffset + 1
   }
 
@@ -283,8 +299,8 @@ trait AstCreatorHelper { this: AstCreator =>
     }
   }
 
-  private def genFileOffsetTable(): Array[Int] = {
-    val chars   = cdtAst.getRawSignature.toCharArray
+  private def genFileOffsetTable(translationUnit: IASTTranslationUnit): Array[Int] = {
+    val chars   = translationUnit.getRawSignature.toCharArray
     val buf     = new scala.collection.mutable.ArrayBuffer[Int](256)
     var charIdx = 0
     while (charIdx < chars.length) {

@@ -106,13 +106,13 @@ class AstCreator(
 
   protected def column(node: IASTNode): Option[Int] = {
     unadjustedOffset(node).map { case (startOffset, _) =>
-      offsetToColumn(startOffset)
+      offsetToColumn(node, startOffset)
     }
   }
 
   protected def columnEnd(node: IASTNode): Option[Int] = {
     unadjustedOffset(node).map { case (_, endOffset) =>
-      offsetToColumn(endOffset - 1)
+      offsetToColumn(node, endOffset - 1)
     }
   }
 

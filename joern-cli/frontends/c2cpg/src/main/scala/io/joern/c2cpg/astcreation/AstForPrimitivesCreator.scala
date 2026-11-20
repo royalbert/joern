@@ -61,12 +61,13 @@ trait AstForPrimitivesCreator { this: AstCreator =>
                 case n: IASTInternalScope if isGlobal(n.getPhysicalNode) => s"${Defines.GlobalTag} "
               }
               .getOrElse("")
+          // A re-parsed text (see `astsForProblemStatement`) does not know the names of the file
           case Some(p: IProblemBinding)
-              if p.getID == ISemanticProblem.BINDING_NOT_FOUND ||
+              if (id.getTranslationUnit eq cdtAst) && (p.getID == ISemanticProblem.BINDING_NOT_FOUND ||
                 p.getID == ISemanticProblem.BINDING_AMBIGUOUS_LOOKUP ||
                 p.getID == ISemanticProblem.BINDING_BAD_SCOPE ||
                 p.getID == ISemanticProblem.BINDING_MEMBER_DECLARATION_NOT_FOUND ||
-                p.getID == ISemanticProblem.BINDING_DEFINITION_NOT_FOUND =>
+                p.getID == ISemanticProblem.BINDING_DEFINITION_NOT_FOUND) =>
             s"${Defines.UnknownTag} "
           case _ => ""
         }

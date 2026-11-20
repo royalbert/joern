@@ -459,6 +459,77 @@ class MacroHandlingTests extends C2CpgSuite {
       }
     }
   }
+
+  "MacroHandlingTests14" should {
+    "keep an un-parsable macro statement as a call in its method" in {
+      val cpg = code("""
+          |#define BROKEN(x) x +
+          |int func(int y) {
+          |  BROKEN(y);
+          |  return y;
+          |}
+          |""".stripMargin)
+      cpg.method.nameExact("BROKEN").isExternal(false) shouldBe empty
+      val List(brokenCall) =
+        cpg.method.nameExact("func").call.nameExact("BROKEN").dispatchType(DispatchTypes.STATIC_DISPATCH).l
+      brokenCall.code shouldBe "BROKEN(y)"
+      brokenCall.argument.isIdentifier.code.l shouldBe List("y")
+      brokenCall.lineNumber shouldBe Some(4)
+      brokenCall.columnNumber shouldBe Some(3)
+    }
+
+    "not declare a local of the macro's type for an un-parsable declaring macro" in {
+      val cpg = code("""
+          |#define INT_VAR(name) INT_BUF(name##_t, 8) name##_buf; int *name = &name##_buf
+          |int func(void) {
+          |  INT_VAR(num);
+          |  return *num;
+          |}
+          |""".stripMargin)
+      cpg.local.nameExact("num").typeFullName.l shouldBe List("int*")
+    }
+
+    "keep the calls in the body of an un-parsable loop macro in its method" in {
+      val cpg = code("""
+          |#define for_each(i, n) for (i = _Generic((n), int: 0, default: 1); i < n; i++)
+          |void work(int);
+          |void func(int n) {
+          |  int i;
+          |  for_each(i, n) {
+          |    work(i);
+          |  }
+          |}
+          |""".stripMargin)
+      cpg.method.nameExact("for_each").isExternal(false) shouldBe empty
+      val List(workCall) = cpg.method.nameExact("func").call.nameExact("work").l
+      workCall.code shouldBe "work(i)"
+      workCall.argument.isIdentifier.code.l shouldBe List("i")
+      workCall.lineNumber shouldBe Some(7)
+      workCall.columnNumber shouldBe Some(5)
+    }
+
+    "keep the calls in the body of an un-parsable loop macro in its method in C++" in {
+      val cpg = code(
+        """
+          |#define for_each(i, n) for (i = _Generic((n), int: 0, default: 1); i < n; i++)
+          |void work(int);
+          |void func(int n) {
+          |  int i;
+          |  for_each(i, n) {
+          |    work(i);
+          |  }
+          |}
+          |""".stripMargin,
+        "file.cpp"
+      )
+      cpg.method.nameExact("func").local.name.l shouldBe List("i")
+      val List(workCall) = cpg.method.nameExact("func").call.nameExact("work").l
+      workCall.code shouldBe "work(i)"
+      workCall.argument.isIdentifier.code.l shouldBe List("i")
+      workCall.lineNumber shouldBe Some(7)
+      workCall.columnNumber shouldBe Some(5)
+    }
+  }
 }
 
 class CfgMacroTests extends DataFlowCodeToCpgSuite {

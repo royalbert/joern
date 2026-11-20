@@ -192,6 +192,7 @@ trait AstForStatementsCreator { this: AstCreator =>
 
   private def astsForDeclarationStatement(decl: IASTDeclarationStatement): Seq[Ast] =
     decl.getDeclaration match {
+      case _ if isCallReadAsDeclaration(decl)          => astsForCallReadAsDeclaration(decl)
       case struct: ICPPASTStructuredBindingDeclaration => astsForStructuredBindingDeclaration(struct)
       case declStmt: CPPASTSimpleDeclaration if isUnsupportedCoroutineKeyword(declStmt) =>
         Seq(astForUnsupportedCoroutineNode(declStmt))
@@ -310,28 +311,80 @@ trait AstForStatementsCreator { this: AstCreator =>
     Ast(catchNode).withChildren(declAst).withChildren(bodyAst)
   }
 
+  /** Opens the function whose body a problem statement's text is re-parsed as, on the text's first line. */
+  private val ProblemStatementPrefix = "void problem() {"
+
+  /** Opens the function and the parenthesis in which a call read as a declaration is re-parsed as an expression. */
+  private val CallReadAsDeclarationPrefix = "void problem() {("
+
   private def astsForProblemStatement(statement: IASTProblemStatement): Seq[Ast] = {
-    val lineNumber   = line(statement)
-    val columnNumber = column(statement)
     // We only handle un-parsable macros here for now
     val isFromMacroExpansion = statement.getProblem.getNodeLocations.exists(_.isInstanceOf[IASTMacroExpansionLocation])
-    val code                 = statement.getRawSignature
-    val file                 = Paths.get(statement.getContainingFilename)
-    val asts                 = if (isFromMacroExpansion) {
-      new CdtParser(config, headerFileFinder, None).parse(code, file, accumulator) match {
-        case Some(translationUnit: IASTTranslationUnit) =>
-          translationUnit.getDeclarations.toIndexedSeq.flatMap(d => astsForDeclaration(d))
-        case None =>
-          Seq.empty
-      }
+    // A problem statement of a re-parsed text is not re-parsed again
+    val isFromMainParse = statement.getTranslationUnit eq cdtAst
+    if (isFromMacroExpansion && isFromMainParse) {
+      // Re-parse the text as a function body, so that it gives statements of the enclosing method
+      astsForReparsedText(statement.getRawSignature, ProblemStatementPrefix, statement)
     } else {
       Seq.empty
     }
-    // Restore the line/column numbers relative to the statements position
+  }
+
+  /** Whether `decl`, from a re-parsed text, is a call such as `f(x);` or `f(x) = y;` read as a declaration of `x`. The
+    * re-parse does not know the names of the file, so CDT may read `f` as the type of a parenthesized declarator.
+    */
+  private def isCallReadAsDeclaration(decl: IASTDeclarationStatement): Boolean = {
+    (decl.getTranslationUnit ne cdtAst) && (decl.getDeclaration match {
+      case declaration: IASTSimpleDeclaration =>
+        (declaration.getDeclSpecifier, declaration.getDeclarators) match {
+          case (namedType: IASTNamedTypeSpecifier, Array(declarator)) =>
+            declarator.getNestedDeclarator != null &&
+            declarator.getPointerOperators.isEmpty &&
+            !declarator.isInstanceOf[IASTFunctionDeclarator] &&
+            !declarator.isInstanceOf[IASTArrayDeclarator] &&
+            safeGetBinding(namedType).isEmpty
+          case _ => false
+        }
+      case _ => false
+    })
+  }
+
+  private def astsForCallReadAsDeclaration(decl: IASTDeclarationStatement): Seq[Ast] = {
+    val callCode = decl.getRawSignature.trim.stripSuffix(";")
+    astsForReparsedText(s"$callCode);", CallReadAsDeclarationPrefix, decl)
+  }
+
+  /** Parses `text` as the body of a function opened by `prefix` on the text's first line, and gives the ASTs of the
+    * body's statements, with lines and columns counted from where `at` starts.
+    */
+  private def astsForReparsedText(text: String, prefix: String, at: IASTNode): Seq[Ast] = {
+    val lineNumber   = line(at)
+    val columnNumber = column(at)
+    val file         = Paths.get(at.getContainingFilename)
+    val asts = new CdtParser(config, headerFileFinder, None).parse(s"$prefix$text\n}", file, accumulator) match {
+      case Some(translationUnit: IASTTranslationUnit) =>
+        translationUnit.getDeclarations.toIndexedSeq.flatMap {
+          case function: IASTFunctionDefinition =>
+            function.getBody match {
+              case body: IASTCompoundStatement => body.getStatements.toIndexedSeq.flatMap(astsForStatement)
+              case _                           => Seq.empty
+            }
+          case _ => Seq.empty
+        }
+      case None =>
+        Seq.empty
+    }
+    // Columns of the text's later lines are already those of the file. On its first line, they follow `prefix`.
     asts.flatMap(_.nodes).foreach {
       case astNodeNew: AstNodeNew =>
-        astNodeNew.lineNumber = (lineNumber ++ astNodeNew.lineNumber).reduceOption { case (a, b) => a + (b - 1) }
-        astNodeNew.columnNumber = (columnNumber ++ astNodeNew.columnNumber).reduceOption(_ + _)
+        val lineInText = astNodeNew.lineNumber
+        astNodeNew.lineNumber = (lineNumber ++ lineInText).reduceOption { case (a, b) => a + (b - 1) }
+        if (lineInText.contains(1)) {
+          astNodeNew.columnNumber = for {
+            atColumn     <- columnNumber
+            columnInText <- astNodeNew.columnNumber
+          } yield atColumn + columnInText - 1 - prefix.length
+        }
       case _ => // do nothing
     }
     asts
