@@ -556,7 +556,11 @@ class MethodTests extends C2CpgSuite {
           |""".stripMargin,
         "test.cpp"
       )
-      cpg.method.filter(_.name.contains("foo")).methodReturn.typeFullName.l shouldBe List("int", "vector", "vector")
+      cpg.method.filter(_.name.contains("foo")).methodReturn.typeFullName.l shouldBe List(
+        "int",
+        "std.vector",
+        "std.vector"
+      )
     }
 
     "be correct for C function pointer" in {

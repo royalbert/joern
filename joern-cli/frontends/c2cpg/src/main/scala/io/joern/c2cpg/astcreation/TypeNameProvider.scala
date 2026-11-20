@@ -54,10 +54,13 @@ trait TypeNameProvider { this: AstCreator =>
   private def declaratorAt(declaration: IASTSimpleDeclaration, index: Int): Option[IASTDeclarator] =
     declaration.getDeclarators.lift(index)
 
-  /** The declarator at `index` of the declaration `node` is part of, if there is one. */
+  /** The declarator at `index` of the declaration `node` is part of, if there is one. A function definition has a
+    * single declarator.
+    */
   private def parentDeclaratorAt(node: IASTNode, index: Int): Option[IASTDeclarator] =
     node.getParent match {
       case declaration: IASTSimpleDeclaration => declaratorAt(declaration, index)
+      case definition: IASTFunctionDefinition => Option(definition.getDeclarator)
       case _                                  => None
     }
 

@@ -2623,6 +2623,21 @@ class AstCreationPassTests extends AstC2CpgSuite {
       cpg.method.nameExact("a").methodReturn.typeFullName.head shouldBe "char*"
     }
 
+    "be consistent with pointer return types of definitions" in {
+      val cpg = code("""
+        |typedef unsigned char u8;
+        |struct s { int a; };
+        |enum e { A };
+        |u8 *f1(void) { return 0; }
+        |struct s *f2(void) { return 0; }
+        |enum e *f3(void) { return 0; }
+        |""".stripMargin)
+      cpg.method.nameExact("f1").methodReturn.typeFullName.head shouldBe "u8*"
+      cpg.method.nameExact("f2").methodReturn.typeFullName.head shouldBe "s*"
+      cpg.method.nameExact("f3").methodReturn.typeFullName.head shouldBe "e*"
+      cpg.method.nameExact("f1").signature.head shouldBe "u8*(void)"
+    }
+
     "be consistent with array types" in {
       val cpg = code("""
         |struct x { char z[1]; };
