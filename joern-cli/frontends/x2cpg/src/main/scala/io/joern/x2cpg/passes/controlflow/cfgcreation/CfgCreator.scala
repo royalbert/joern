@@ -112,7 +112,7 @@ class CfgCreator(entryNode: Method, diffGraph: DiffGraphBuilder) {
         cfgForReturn(ret)
       case call: Call if call.name == Operators.logicalAnd =>
         cfgForAndExpression(call)
-      case call: Call if call.name == Operators.logicalOr =>
+      case call: Call if call.name == Operators.logicalOr || call.name == Operators.elvis =>
         cfgForOrExpression(call)
       case call: Call if call.name == Operators.conditional =>
         cfgForConditionalExpression(call)
@@ -130,7 +130,8 @@ class CfgCreator(entryNode: Method, diffGraph: DiffGraphBuilder) {
 
   private def isLogicalOperator(node: AstNode): Boolean = node match {
     case call: Call =>
-      call.name == Operators.conditional || call.name == Operators.logicalOr || call.name == Operators.logicalAnd
+      call.name == Operators.conditional || call.name == Operators.logicalOr || call.name == Operators.logicalAnd ||
+      call.name == Operators.elvis
     case _ => false
   }
 
