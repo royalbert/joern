@@ -424,15 +424,12 @@ trait AstForExpressionsCreator { this: AstCreator =>
     if (unary.getOperator == IASTUnaryExpression.op_bracketedPrimary) {
       nullSafeAst(unary.getOperand)
     } else {
-      val cpgUnary = callNode(
-        unary,
-        code(unary),
-        operatorMethod,
-        operatorMethod,
-        DispatchTypes.STATIC_DISPATCH,
-        None,
-        Some(Defines.Any)
-      )
+      val tpe = unary.getOperator match {
+        case IASTUnaryExpression.op_star | IASTUnaryExpression.op_amper => registerType(expressionTypeAsDeclared(unary))
+        case _                                                          => Defines.Any
+      }
+      val cpgUnary =
+        callNode(unary, code(unary), operatorMethod, operatorMethod, DispatchTypes.STATIC_DISPATCH, None, Some(tpe))
       val operand = nullSafeAst(unary.getOperand)
       callAst(cpgUnary, List(operand))
     }
@@ -449,7 +446,7 @@ trait AstForExpressionsCreator { this: AstCreator =>
     operatorForTypeIdExpression(typeId.getOperator) match {
       case Some(name) =>
         val call = callNode(typeId, code(typeId), name, name, DispatchTypes.STATIC_DISPATCH, None, Some(Defines.Any))
-        val tpe  = registerType(typeFor(typeId.getTypeId.getDeclSpecifier))
+        val tpe  = registerType(typeForTypeId(typeId.getTypeId))
         val arg  = Ast(typeRefNode(typeId.getTypeId, code(typeId.getTypeId), tpe))
         callAst(call, List(arg))
       case None => notHandledYet(typeId)
@@ -458,8 +455,8 @@ trait AstForExpressionsCreator { this: AstCreator =>
 
   private def astForConditionalExpression(expr: IASTConditionalExpression): Ast = {
     val name = Operators.conditional
-    val call =
-      callNode(expr, code(expr), name, name, DispatchTypes.STATIC_DISPATCH, None, Some(Defines.Any))
+    val tpe  = registerType(expressionTypeAsDeclared(expr))
+    val call = callNode(expr, code(expr), name, name, DispatchTypes.STATIC_DISPATCH, None, Some(tpe))
 
     val condAst = nullSafeAst(expr.getLogicalConditionExpression)
     val posAst  = nullSafeAst(expr.getPositiveResultExpression)
@@ -479,7 +476,7 @@ trait AstForExpressionsCreator { this: AstCreator =>
         name,
         DispatchTypes.STATIC_DISPATCH,
         None,
-        Some(Defines.Any)
+        Some(registerType(expressionTypeAsDeclared(arrayIndexExpression)))
       )
 
     val expr = astForExpression(arrayIndexExpression.getArrayExpression)
@@ -489,7 +486,7 @@ trait AstForExpressionsCreator { this: AstCreator =>
 
   private def astForCastExpression(castExpression: IASTCastExpression): Ast = {
     val op                = Operators.cast
-    val tpe               = typeFor(castExpression.getTypeId.getDeclSpecifier)
+    val tpe               = typeForTypeId(castExpression.getTypeId)
     val cpgCastExpression = callNode(
       castExpression,
       code(castExpression),
@@ -654,7 +651,7 @@ trait AstForExpressionsCreator { this: AstCreator =>
 
   private def astForTypeIdInitExpression(typeIdInit: IASTTypeIdInitializerExpression): Ast = {
     val op                = Operators.cast
-    val tpe               = typeFor(typeIdInit.getTypeId.getDeclSpecifier)
+    val tpe               = typeForTypeId(typeIdInit.getTypeId)
     val cpgCastExpression =
       callNode(typeIdInit, code(typeIdInit), op, op, DispatchTypes.STATIC_DISPATCH, None, Some(registerType(tpe)))
     val typeRefAst = Ast(typeRefNode(typeIdInit.getTypeId, code(typeIdInit.getTypeId), tpe))

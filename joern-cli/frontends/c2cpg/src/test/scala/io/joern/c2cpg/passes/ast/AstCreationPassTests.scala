@@ -2627,6 +2627,64 @@ class AstCreationPassTests extends AstC2CpgSuite {
       cpg.method.nameExact("a").methodReturn.typeFullName.head shouldBe "char*"
     }
 
+    "be consistent with pointer types in casts, compound literals and sizeof" in {
+      val cpg = code("""
+        |#define N 2
+        |enum { K = 4 };
+        |struct foo { int x; };
+        |int f(void *v) {
+        |  struct foo *p = (struct foo *)v;
+        |  int (*m)[4] = (int (*)[4])v;
+        |  int (*w)[K] = (int (*)[K])v;
+        |  struct foo *a[] = { p, 0 };
+        |  struct foo **q = (struct foo *[]){ p, 0 };
+        |  struct foo *b[N];
+        |  unsigned long n = sizeof(struct foo *) + sizeof(struct foo *[N]) + sizeof(char[N > 1 ? 1 : -1]);
+        |  unsigned long z = sizeof(int (*)[K]);
+        |  return p->x;
+        |}
+        |""".stripMargin)
+      val List(cast, arrayCast, enumArrayCast, literal) = cpg.call.nameExact(Operators.cast).l
+      cast.typeFullName shouldBe "foo*"
+      cast.argument(1).isTypeRef.typeFullName.l shouldBe List("foo*")
+      cpg.local.nameExact("p").typeFullName.l shouldBe List("foo*")
+      arrayCast.typeFullName shouldBe "int(*)[4]"
+      cpg.local.nameExact("m").typeFullName.l shouldBe List("int(*)[4]")
+      enumArrayCast.typeFullName shouldBe "int(*)[4]"
+      cpg.local.nameExact("w").typeFullName.l shouldBe List("int(*)[4]")
+      literal.typeFullName shouldBe "foo*[]"
+      literal.argument(1).isTypeRef.typeFullName.l shouldBe List("foo*[]")
+      cpg.local.nameExact("a").typeFullName.l shouldBe List("foo*[]")
+      cpg.local.nameExact("b").typeFullName.l shouldBe List("foo*[2]")
+      cpg.call.nameExact(Operators.sizeOf).argument.isTypeRef.typeFullName.l shouldBe List(
+        "foo*",
+        "foo*[2]",
+        "char[]",
+        "int(*)[4]"
+      )
+    }
+
+    "be correct for field accesses, index accesses, dereferences, addresses and conditionals" in {
+      val cpg = code("""
+        |typedef unsigned int u32;
+        |struct in { u32 c; };
+        |struct out { struct in a; struct in arr[2]; };
+        |void f(struct out o, struct out *p, int k) {
+        |  u32 c = o.a.c;
+        |  struct in e = p->arr[1];
+        |  struct out d = *p;
+        |  struct out *r = &o;
+        |  struct out s = k ? o : p[0];
+        |}
+        |""".stripMargin)
+      cpg.call.codeExact("o.a").typeFullName.l shouldBe List("in")
+      cpg.call.codeExact("o.a.c").typeFullName.l shouldBe List("u32")
+      cpg.call.codeExact("p->arr[1]").typeFullName.l shouldBe List("in")
+      cpg.call.codeExact("*p").typeFullName.l shouldBe List("out")
+      cpg.call.codeExact("&o").typeFullName.l shouldBe List("out*")
+      cpg.call.codeExact("k ? o : p[0]").typeFullName.l shouldBe List("out")
+    }
+
     "be consistent with array types" in {
       val cpg = code("""
         |struct x { char z[1]; };

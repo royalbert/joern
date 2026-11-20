@@ -4,6 +4,7 @@ import org.apache.commons.lang3.StringUtils
 import org.eclipse.cdt.core.dom.ast.*
 import org.eclipse.cdt.core.dom.ast.cpp.*
 import org.eclipse.cdt.core.dom.ast.gnu.c.ICASTKnRFunctionDeclarator
+import org.eclipse.cdt.internal.core.dom.parser.ValueFactory
 import org.eclipse.cdt.internal.core.dom.parser.cpp.*
 import org.eclipse.cdt.internal.core.dom.parser.cpp.semantics.*
 import org.eclipse.cdt.internal.core.model.ASTStringUtil
@@ -154,7 +155,15 @@ trait TypeNameProvider { this: AstCreator =>
     safeCdtCall(safeGetType(expr.getExpressionType)).getOrElse(Defines.Any)
   }
 
-  private def safeGetTypeInternal(tpe: IType): String = {
+  /** The type of `expr` with the typedef names it is declared with kept (`u32`, not `unsigned int`), the name the
+    * member, variable or element it evaluates to is typed with.
+    */
+  private[astcreation] def expressionTypeAsDeclared(expr: IASTExpression): String = {
+    // In case of unresolved includes etc. this may fail throwing an unrecoverable exception
+    safeCdtCall(safeGetTypeInternal(expr.getExpressionType, resolveTypedefs = false)).getOrElse(Defines.Any)
+  }
+
+  private def safeGetTypeInternal(tpe: IType, resolveTypedefs: Boolean = true): String = {
     val tpeString = tpe match {
       case _: CPPClosureType                       => Defines.Function
       case templateType: ICPPTemplateTypeParameter => templateType.getName
@@ -167,15 +176,15 @@ trait TypeNameProvider { this: AstCreator =>
         }
       case _ =>
         // In case of unresolved includes etc. this may fail throwing an unrecoverable exception
-        Try(renderedTypeName(tpe)).getOrElse(Defines.Any)
+        Try(renderedTypeName(tpe, resolveTypedefs)).getOrElse(Defines.Any)
     }
     cleanType(tpeString)
   }
 
   /** The name of `tpe` from its kind and modifiers where possible, else the string CDT renders for it. */
-  private def renderedTypeName(tpe: IType): String = {
+  private def renderedTypeName(tpe: IType, resolveTypedefs: Boolean): String = {
     BasicTypeNames.renderBasic(tpe).getOrElse {
-      ASTTypeUtil.getType(tpe)
+      ASTTypeUtil.getType(tpe, resolveTypedefs)
     }
   }
 
@@ -388,6 +397,60 @@ trait TypeNameProvider { this: AstCreator =>
     tpe.startsWith("[*this]") || tpe.startsWith("[this]") || (tpe.startsWith("[") && tpe.contains("this]"))
   }
 
+  /** The type `typeId` names: the type of its specifier with the pointer layers, references and array dimensions of its
+    * abstract declarator, spelled as a variable of that type is: `foo*` for `(struct foo *)p`, `char*[]` for
+    * `(const char *[]){ "a" }` and `int(*)[4]` for `(int (*)[4])p`. A function declarator adds only its outer suffix.
+    * An array size is written as a variable's is: with the code of its size expression, or, in a declarator with a
+    * nested declarator, with the size CDT evaluates (`int(*)[4]` for `(int (*)[K])p`). A size that no type name can
+    * hold, such as the `(c) ? 1 : -1` of a static assertion, is left out.
+    */
+  private[astcreation] def typeForTypeId(typeId: IASTTypeId): String = {
+    val tpe = typeFor(typeId.getDeclSpecifier)
+    Option(typeId.getAbstractDeclarator) match {
+      case Some(declarator) if tpe != Defines.Any =>
+        def named(sizes: Boolean): String = {
+          val evaluated = Option(declarator.getNestedDeclarator).isDefined
+          val suffix    = abstractDeclaratorSuffix(declarator, sizes, evaluated)
+          cleanType(s"$tpe${suffix.getOrElse(pointerAndArraySuffix(declarator))}")
+        }
+        Some(named(sizes = true)).filterNot(Set(Defines.Any, Defines.Function)).getOrElse(named(sizes = false))
+      case _ => tpe
+    }
+  }
+
+  /** The pointers, references, nested declarator and array dimensions of `declarator` in declaration order, `*(*)[2]`
+    * for the declarator of `struct foo *(*)[2]`; None if it holds a function declarator. An array dimension is written
+    * with the size CDT evaluates if `evaluated`, else, with `sizes`, with the code of its size expression.
+    */
+  private def abstractDeclaratorSuffix(declarator: IASTDeclarator, sizes: Boolean, evaluated: Boolean): Option[String] =
+    declarator match {
+      case _: IASTFunctionDeclarator => None
+      case _                         =>
+        val pointers = pointerOperators(declarator)
+        val arrays   = declarator match {
+          case array: IASTArrayDeclarator =>
+            array.getArrayModifiers.iterator.map { modifier =>
+              val size = Option(modifier.getConstantExpression).fold("") { expr =>
+                if (evaluated) evaluatedArraySize(expr) else if (sizes) nodeSignature(expr) else ""
+              }
+              s"[$size]"
+            }.mkString
+          case _ => ""
+        }
+        Option(declarator.getNestedDeclarator).fold(Option(""))(abstractDeclaratorSuffix(_, sizes, evaluated)).map {
+          case ""                       => s"$pointers$arrays"
+          case nested if arrays.isEmpty => s"$pointers$nested"
+          case nested                   => s"$pointers($nested)$arrays"
+        }
+    }
+
+  /** The size CDT evaluates for an array size expression, as it writes it in the name of an array type; empty if CDT
+    * cannot evaluate it.
+    */
+  private def evaluatedArraySize(expr: IASTExpression): String = {
+    safeCdtCall(ValueFactory.create(expr)).flatMap(value => Option(value.numberValue)).fold("")(_.longValue.toString)
+  }
+
   private def pointersAsString(spec: IASTDeclSpecifier, parentDecl: IASTDeclarator): String = {
     val tpe = (spec match {
       case simple: IASTSimpleDeclSpecifier => BasicTypeNames.forSimpleDeclSpecifier(simple)
@@ -408,15 +471,17 @@ trait TypeNameProvider { this: AstCreator =>
       case p: IASTArrayDeclarator => p.getArrayModifiers.iterator.map(_.getRawSignature).mkString
       case _                      => ""
     }
-    val refs = declarator.getPointerOperators
+    s"$arr${pointerOperators(declarator)}"
+  }
+
+  private def pointerOperators(declarator: IASTDeclarator): String =
+    declarator.getPointerOperators
       .map {
         case r: ICPPASTReferenceOperator if r.isRValueReference => "&&"
         case _: ICPPASTReferenceOperator                        => "&"
         case _: IASTPointer                                     => "*"
       }
       .mkString("")
-    s"$arr$refs"
-  }
 
   private def safeGetNodeType(node: IASTNode): String = {
     // In case of unresolved includes etc. this may fail throwing an unrecoverable exception
