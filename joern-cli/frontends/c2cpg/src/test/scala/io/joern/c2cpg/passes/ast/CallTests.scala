@@ -1032,4 +1032,37 @@ class CallTests extends C2CpgSuite {
       }
     }
   }
+
+  "Calls to C++ member functions that the object's class inherits" should {
+    "link to the method of the base class that declares it" in {
+      val cpg = code(
+        """
+          |struct Base { void stop() {} virtual void fire() {} int operator()(int v) { return v; } };
+          |struct Mid : Base { void start(int d) {} };
+          |struct Leaf : Mid {};
+          |template <typename T> struct Tpl { void tb() {} };
+          |struct FromTpl : Tpl<int> {};
+          |namespace ns { namespace { struct Hidden { void hm() {} }; } struct FromHidden : Hidden {}; }
+          |void use(Leaf &l, Mid *m, FromTpl t, ns::FromHidden h) {
+          |  l.stop(); m->stop(); l.start(1); l.fire(); l(2); t.tb(); h.hm();
+          |}
+          |""".stripMargin,
+        "test.cpp"
+      )
+      List(
+        "stop"  -> ("Base.stop:void()", 2),
+        "start" -> ("Mid.start:void(int)", 1),
+        "fire"  -> ("Base.fire:void()", 1),
+        "()"    -> ("Base.():int(int)", 1),
+        "tb"    -> ("Tpl.tb:void()", 1),
+        "hm"    -> ("ns.Hidden.hm:void()", 1)
+      ).foreach { case (name, (fullName, callCount)) =>
+        withClue(name) {
+          cpg.method.nameExact(name).fullName.l shouldBe List(fullName)
+          cpg.call.nameExact(name).methodFullName.l shouldBe List.fill(callCount)(fullName)
+          cpg.call.nameExact(name).callee.isExternal.l shouldBe List.fill(callCount)(false)
+        }
+      }
+    }
+  }
 }

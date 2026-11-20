@@ -242,8 +242,9 @@ trait AstForExpressionsCreator { this: AstCreator =>
             val name =
               stripTemplateTags(replaceOperator(StringUtils.normalizeSpace(fieldRefExpr.getFieldName.toString)))
             val signature = declaredSignature(method).getOrElse(s"${functionTypeToSignature(functionType)}$constFlag")
-            val classFullName = safeGetType(fieldRefExpr.getFieldOwnerType)
-            val fullName      = s"$classFullName.$name:$signature"
+            val classFullName =
+              declaringClassFullName(method).getOrElse(safeGetType(fieldRefExpr.getFieldOwnerType))
+            val fullName = s"$classFullName.$name:$signature"
 
             val (dispatchType, receiver) =
               if (method.isVirtual || method.isPureVirtual) {
@@ -289,7 +290,10 @@ trait AstForExpressionsCreator { this: AstCreator =>
             val args        = call.getArguments.toList.map(a => astForNode(a))
             createCallAst(callCpgNode, args, receiver = Some(receiverAst))
           case _ =>
-            val classFullName = safeGetType(classType)
+            val classFullName = safeCdtCall(evaluation.getOverload)
+              .collect { case method: ICPPMethod => method }
+              .flatMap(declaringClassFullName)
+              .getOrElse(safeGetType(classType))
             // The resolved overload is the very declaration this call must link to; naming it the way
             // the declaration side does keeps CALL.methodFullName equal to METHOD.fullName.
             val operatorName = safeCdtCall(evaluation.getOverload)
@@ -323,6 +327,15 @@ trait AstForExpressionsCreator { this: AstCreator =>
       case _ => astForCppCallExpressionUntyped(call)
     }
   }
+
+  /** The class that declares `method`, taken from the method's qualified name as in the method's own full name. A
+    * member call is named after it, as the method is.
+    */
+  private def declaringClassFullName(method: ICPPMethod): Option[String] =
+    safeCdtCall(method.getQualifiedName)
+      .filter(_.length > 1)
+      .map(name => stripTemplateTags(replaceQualifiedNameSeparator(name.init.mkString("."))))
+      .filter(_.nonEmpty)
 
   private def astForCppCallExpressionUntyped(call: ICPPASTFunctionCallExpression): Ast = {
     call.getFunctionNameExpression match {
