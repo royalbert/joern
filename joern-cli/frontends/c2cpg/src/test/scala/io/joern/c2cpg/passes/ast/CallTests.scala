@@ -679,6 +679,26 @@ class CallTests extends C2CpgSuite {
       call.receiver.isEmpty shouldBe true
     }
 
+    "have a stub without parameters for a plain call without arguments (C)" in {
+      val cpg = code(
+        """
+          |void outer() {
+          |  foo();
+          |  bar();
+          |  bar(1);
+          |}
+          |""".stripMargin,
+        "test.c"
+      )
+
+      val List(foo) = cpg.method.nameExact("foo").l
+      foo.isExternal shouldBe true
+      foo.parameter.l shouldBe empty
+
+      val List(bar) = cpg.method.nameExact("bar").l
+      bar.parameter.name.l shouldBe List("p1")
+    }
+
     "have correct call for call on arbitrary expression (C)" in {
       val cpg = code(
         """

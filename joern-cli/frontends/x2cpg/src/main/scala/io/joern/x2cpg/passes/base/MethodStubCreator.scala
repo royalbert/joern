@@ -41,7 +41,8 @@ class MethodStubCreator(cpg: Cpg) extends CpgPass(cpg) {
             call.methodFullName,
             call.signature,
             call.dispatchType,
-            call.argument.argumentIndex.minOption.getOrElse(0),
+            // a call without arguments is the empty range 1..0, so its stub gets no parameters
+            call.argument.argumentIndex.minOption.getOrElse(1),
             call.argument.argumentIndex.maxOption.getOrElse(0),
             call.argument.size
           )
