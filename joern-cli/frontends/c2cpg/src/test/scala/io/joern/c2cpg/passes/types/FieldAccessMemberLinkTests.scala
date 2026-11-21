@@ -422,6 +422,21 @@ class FieldAccessMemberLinkTests extends C2CpgSuite {
     }
   }
 
+  "A field access to a struct of a header that the include does not find" should {
+    val cpg = code(
+      """
+        |#include "acpi/tables.h"
+        |unsigned int revision(struct rsdp *r) { return r->revision; }
+        |""".stripMargin,
+      "src/acpi.c"
+    ).moreCode("struct rsdp { unsigned int revision; };\n", "include/acpi/tables.h")
+
+    "reach the member of the header c2cpg finds for it" in {
+      cpg.fieldAccess.codeExact("r->revision").referencedMember.map(describe).l shouldBe
+        List("include/acpi/tables.h:rsdp.revision")
+    }
+  }
+
   "A field access CDT cannot resolve" should {
     val cpg = code("""
         |int f(struct unknown *u) { return u->x; }

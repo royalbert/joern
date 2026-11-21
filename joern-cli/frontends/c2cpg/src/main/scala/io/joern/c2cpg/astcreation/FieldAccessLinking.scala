@@ -192,7 +192,9 @@ trait FieldAccessLinking { this: AstCreator =>
     * it starts in, and the name it gives its type (empty for an anonymous struct). All of these are the same in every
     * translation unit that includes the file. A macro call's expansion is placed at the call as a whole, so the
     * definitions one call expands to share the file offset and are told apart by their offsets in the expansion; the
-    * name tells apart the definitions of a call whose macro is defined differently for different translation units.
+    * name tells apart the definitions of a call whose macro is defined differently for different translation units. For
+    * an include path CDT tries where no file exists, c2cpg gives CDT a header of the same name found elsewhere in the
+    * code, which CDT reads under that path; that header's own path is taken.
     */
   private def placeOf(specifier: IASTCompositeTypeSpecifier): Option[DeclarationPlace] = {
     for {
@@ -200,7 +202,10 @@ trait FieldAccessLinking { this: AstCreator =>
       file     <- Option(location.getFileName).filter(_.nonEmpty)
       name     <- safeCdtCall(specifier.getName.toString)
     } yield {
-      val path = normalizedPaths.getOrElseUpdate(file, Paths.get(file).normalize().toString)
+      val path = normalizedPaths.getOrElseUpdate(
+        file,
+        Paths.get(headerFileFinder.substitutedFor(file).getOrElse(file)).normalize().toString
+      )
       DeclarationPlace(path, location.getNodeOffset, offsetInMacroExpansion(specifier), name)
     }
   }
