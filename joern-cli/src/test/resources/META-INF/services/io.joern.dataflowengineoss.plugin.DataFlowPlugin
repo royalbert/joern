@@ -1,0 +1,8 @@
+io.joern.joerncli.TouchUntouchedPlugin
+io.joern.joerncli.TouchMayChangePlugin
+io.joern.joerncli.TouchEndsPlugin
+io.joern.joerncli.TouchOverwritesPlugin
+io.joern.joerncli.TouchTaggedPlugin
+io.joern.joerncli.TouchSemanticsPlugin
+io.joern.joerncli.CountingPlugin
+io.joern.joerncli.FailingPlugin
