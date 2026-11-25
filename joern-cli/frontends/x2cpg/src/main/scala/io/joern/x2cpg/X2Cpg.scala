@@ -28,7 +28,9 @@ object X2CpgConfig {
     ignoredFilesRegex: Regex = "".r,
     ignoredFiles: Seq[String] = Seq.empty,
     schemaValidation: ValidationMode = ValidationMode.Disabled,
-    disableFileContent: Boolean = true
+    disableFileContent: Boolean = true,
+    pluginNames: Seq[String] = Seq.empty,
+    pluginSettings: Map[String, Map[String, String]] = Map.empty
   ) {}
 
 }
@@ -46,6 +48,12 @@ trait X2CpgConfig[T <: X2CpgConfig[?]] {
   final def ignoredFiles: Seq[String]            = genericConfig.ignoredFiles
   final def schemaValidation: ValidationMode     = genericConfig.schemaValidation
   final def disableFileContent: Boolean          = genericConfig.disableFileContent
+
+  /** The names of the plug-ins to run (see [[io.joern.x2cpg.plugin.FrontendPlugin]]). */
+  final def pluginNames: Seq[String] = genericConfig.pluginNames
+
+  /** Each plug-in's settings, by plug-in name. */
+  final def pluginSettings: Map[String, Map[String, String]] = genericConfig.pluginSettings
 
   protected def withGenericConfig(value: X2CpgConfig.GenericConfig): OwnType
 
@@ -92,6 +100,22 @@ trait X2CpgConfig[T <: X2CpgConfig[?]] {
 
   final def withDisableFileContent(value: Boolean): OwnType = {
     withGenericConfig(genericConfig.copy(disableFileContent = value))
+  }
+
+  /** Adds the plug-in named `name` to the plug-ins to run. */
+  final def withPlugin(name: String): OwnType = {
+    withGenericConfig(genericConfig.copy(pluginNames = pluginNames :+ name))
+  }
+
+  /** Adds the setting `key` = `value` for the plug-in named `pluginName`. */
+  final def withPluginSetting(pluginName: String, key: String, value: String): OwnType = {
+    val settings = pluginSettings.getOrElse(pluginName, Map.empty) + (key -> value)
+    withGenericConfig(genericConfig.copy(pluginSettings = pluginSettings + (pluginName -> settings)))
+  }
+
+  /** The configuration without plug-in names and settings, for a run whose plug-ins are already loaded. */
+  final def withoutNamedPlugins: OwnType = {
+    withGenericConfig(genericConfig.copy(pluginNames = Seq.empty, pluginSettings = Map.empty))
   }
 }
 

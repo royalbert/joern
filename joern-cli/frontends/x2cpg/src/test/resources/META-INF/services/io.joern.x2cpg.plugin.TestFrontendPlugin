@@ -1,0 +1,3 @@
+io.joern.x2cpg.plugin.ClassPathPlugin
+io.joern.x2cpg.plugin.TwinPlugin
+io.joern.x2cpg.plugin.OtherTwinPlugin
