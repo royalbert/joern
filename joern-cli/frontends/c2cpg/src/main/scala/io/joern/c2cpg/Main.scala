@@ -1,6 +1,8 @@
 package io.joern.c2cpg
 
 import io.joern.c2cpg.Frontend.*
+import io.joern.c2cpg.plugin.C2CpgPlugin
+import io.joern.x2cpg.plugin.FrontendPlugins
 import io.joern.x2cpg.{SourceFiles, X2CpgConfig, X2CpgMain}
 import scopt.OParser
 
@@ -15,7 +17,8 @@ final case class Config(
   skipFunctionBodies: Boolean = false,
   withPreprocessedFiles: Boolean = false,
   compilationDatabaseFilename: Option[String] = None,
-  override val genericConfig: X2CpgConfig.GenericConfig = X2CpgConfig.GenericConfig()
+  override val genericConfig: X2CpgConfig.GenericConfig = X2CpgConfig.GenericConfig(),
+  plugins: Seq[C2CpgPlugin] = Seq.empty
 ) extends X2CpgConfig[Config] {
 
   override def withGenericConfig(value: X2CpgConfig.GenericConfig): Config = copy(genericConfig = value)
@@ -58,6 +61,11 @@ final case class Config(
 
   def withCompilationDatabase(value: String): Config = {
     this.copy(compilationDatabaseFilename = Option(value))
+  }
+
+  /** Plug-ins to run besides those named in [[pluginNames]] (see [[io.joern.c2cpg.plugin.C2CpgPlugin]]). */
+  def withPlugins(value: Seq[C2CpgPlugin]): Config = {
+    this.copy(plugins = value)
   }
 }
 
@@ -111,7 +119,10 @@ object Frontend {
             | For a cmake based build such a file is generated with the environment variable CMAKE_EXPORT_COMPILE_COMMANDS being present.
             | Clang based build are supported e.g., with https://github.com/rizsotto/Bear
             | """.stripMargin)
-        .action((d, c) => c.withCompilationDatabase(SourceFiles.toAbsolutePath(d, c.inputPath)))
+        .action((database, config) =>
+          config.withCompilationDatabase(SourceFiles.toAbsolutePath(database, config.inputPath))
+        ),
+      FrontendPlugins.commandLineOptions[Config]("io.joern.c2cpg.plugin.C2CpgPlugin")
     )
   }
 

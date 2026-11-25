@@ -1,5 +1,6 @@
 package io.joern.c2cpg.astcreation
 
+import io.joern.c2cpg.plugin.C2CpgPlugin
 import io.joern.c2cpg.passes.FunctionDeclNodePass
 import io.joern.x2cpg.Ast
 import io.joern.x2cpg.datastructures.Stack.*
@@ -170,7 +171,7 @@ trait AstForFunctionsCreator { this: AstCreator =>
     methodRefNode_ match {
       case Some(ref) =>
         createFunctionTypeAndTypeDecl(funcDef, methodNode_)
-        Ast.storeInDiffGraph(astForMethod, diffGraph)
+        storeAst(astForMethod)
         if (isConstructor) {
           methodNode_.astParentType = TypeDecl.Label
           methodNode_.astParentFullName = fullName.substring(0, fullName.lastIndexOf(s".$name:"))
@@ -229,8 +230,8 @@ trait AstForFunctionsCreator { this: AstCreator =>
       .withBindsEdge(methodTypeDeclNode, functionBinding)
       .withRefEdge(functionBinding, methodNode)
 
-    Ast.storeInDiffGraph(Ast(methodTypeDeclNode), diffGraph)
-    Ast.storeInDiffGraph(functionBindAst, diffGraph)
+    storeAst(Ast(methodTypeDeclNode))
+    storeAst(functionBindAst)
   }
 
   private def staticModifierFor(
@@ -662,7 +663,8 @@ trait AstForFunctionsCreator { this: AstCreator =>
       EvaluationStrategies.BY_VALUE,
       lineNumber = line(parameter),
       columnNumber = column(parameter),
-      typeFullName = registerType(tpe)
+      typeFullName = registerType(tpe),
+      tags = C2CpgPlugin.parameterTags(config.plugins, parameter, paramIndex)
     )
   }
 
@@ -678,6 +680,7 @@ trait AstForFunctionsCreator { this: AstCreator =>
         parameterInfo.evaluationStrategy,
         parameterInfo.typeFullName
       )
+    C2CpgPlugin.storeParameterTags(parameterNode, parameterInfo.tags, diffGraph)
     scope.addVariable(
       parameterInfo.name,
       parameterNode,
@@ -835,7 +838,7 @@ trait AstForFunctionsCreator { this: AstCreator =>
       .withChildren(modifiers)
 
     val parentNode = methodAstParentStack.collectFirst { case t: NewTypeDecl => t }
-    Ast.storeInDiffGraph(lambdaMethodAst, diffGraph)
+    storeAst(lambdaMethodAst)
     parentNode.foreach { typeDeclNode =>
       diffGraph.addEdge(typeDeclNode, lambdaMethodNode, EdgeTypes.AST)
     }
@@ -868,8 +871,8 @@ trait AstForFunctionsCreator { this: AstCreator =>
       .withBindsEdge(lambdaTypeDeclNode, functionBinding)
       .withRefEdge(functionBinding, lambdaMethodNode)
 
-    Ast.storeInDiffGraph(Ast(lambdaTypeDeclNode), diffGraph)
-    Ast.storeInDiffGraph(functionBindAst, diffGraph)
+    storeAst(Ast(lambdaTypeDeclNode))
+    storeAst(functionBindAst)
   }
 
 }

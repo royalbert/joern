@@ -4,9 +4,13 @@ lazy val c2cpg = (project in file("."))
     Projects.x2cpg % "compile->compile;test->test",
     Projects.linterRules % ScalafixConfig
   )
-  .enablePlugins(JavaAppPackaging, LauncherJarPlugin)
+  .enablePlugins(JavaAppPackaging)
   .settings(
     name := "c2cpg",
+
+    // Every jar in the staged `lib` folder, so that a plug-in jar put there is on c2cpg's class path (as joern-cli's
+    // `lib` is on joern-parse's); a wildcard also avoids the `line too long` error on Windows.
+    scriptClasspath := Seq("*"),
 
     libraryDependencies ++= Seq(
       "org.eclipse.platform"    % "org.eclipse.core.resources" % Versions.eclipseCore,

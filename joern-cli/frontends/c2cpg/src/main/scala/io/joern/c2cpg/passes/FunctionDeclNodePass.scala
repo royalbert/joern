@@ -1,6 +1,7 @@
 package io.joern.c2cpg.passes
 
 import io.joern.c2cpg.Config
+import io.joern.c2cpg.plugin.C2CpgPlugin
 import io.joern.x2cpg.passes.frontend.MetaDataPass
 import io.joern.x2cpg.{Ast, Defines, ValidationMode}
 import io.shiftleft.codepropertygraph.generated.*
@@ -38,7 +39,8 @@ object FunctionDeclNodePass {
     val evaluationStrategy: String,
     val lineNumber: Option[Int],
     val columnNumber: Option[Int],
-    val typeFullName: String
+    val typeFullName: String,
+    val tags: Seq[(String, String)] = Seq.empty
   )
 
 }
@@ -103,8 +105,12 @@ class FunctionDeclNodePass(cpg: Cpg, methodDeclarations: Map[String, FunctionDec
   private def stubMethods(dstGraph: DiffGraphBuilder): Unit = {
     methodDeclarations.foreach { case (fullName, methodNodeInfo) =>
       val methodNode_    = methodNode(fullName, methodNodeInfo)
-      val parameterNodes = methodNodeInfo.parameter.map(p => Ast(parameterInNode(p)))
-      val stubAst        =
+      val parameterNodes = methodNodeInfo.parameter.map { parameterInfo =>
+        val parameter = parameterInNode(parameterInfo)
+        C2CpgPlugin.storeParameterTags(parameter, parameterInfo.tags, dstGraph)
+        Ast(parameter)
+      }
+      val stubAst =
         methodStubAst(
           methodNode_,
           parameterNodes,

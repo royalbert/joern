@@ -3,6 +3,7 @@ package io.joern.c2cpg.passes
 import io.joern.c2cpg.C2Cpg
 import io.joern.c2cpg.Config
 import io.joern.c2cpg.astcreation.AstCreator
+import io.joern.c2cpg.plugin.{C2CpgPlugin, TranslationUnitView}
 import io.joern.c2cpg.parser.CdtParser
 import io.joern.c2cpg.parser.CdtParser.HeaderFileParserLanguage
 import io.joern.c2cpg.parser.FileDefaults
@@ -79,7 +80,8 @@ class AstCreationPass(
   fileExtensions: Set[String],
   config: Config,
   previousAccumulator: Option[AstCreationPass.Accumulator] = None,
-  report: Report = new Report()
+  report: Report = new Report(),
+  plugins: Seq[C2CpgPlugin] = Seq.empty
 ) extends ForkJoinParallelCpgPassWithAccumulator[(Path, ILanguage), AstCreationPass.Accumulator](cpg) {
 
   import AstCreationPass.Accumulator
@@ -190,11 +192,17 @@ class AstCreationPass(
           report.addReportInfo(relPath, fileLOC, parsed = true)
           try {
             val languageSuffix = suffixFromLanguage(relPath, language)
-            val localDiff      =
+            val astCreator     =
               new AstCreator(relPath, accumulator, config, translationUnit, headerFileFinder, languageSuffix)(
                 config.schemaValidation
-              ).createAst()
-            diffGraph.absorb(localDiff)
+              )
+            astCreator.keepTranslationUnitNodes = plugins.nonEmpty
+            diffGraph.absorb(astCreator.createAst())
+            if (plugins.nonEmpty) {
+              val isCpp = language.isInstanceOf[GPPLanguage]
+              val unit  = new TranslationUnitView(relPath, translationUnit, isCpp, astCreator.translationUnitNodes)
+              plugins.foreach(plugin => C2CpgPlugin.runOnTranslationUnit(plugin, unit, diffGraph))
+            }
             logger.debug(s"Processed ‘$relPath’")
             true
           } catch {

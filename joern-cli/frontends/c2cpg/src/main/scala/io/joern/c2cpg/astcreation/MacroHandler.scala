@@ -1,5 +1,6 @@
 package io.joern.c2cpg.astcreation
 
+import io.joern.c2cpg.plugin.C2CpgPlugin
 import io.joern.c2cpg.passes.FunctionDeclNodePass
 import io.joern.x2cpg.Ast
 import io.shiftleft.codepropertygraph.generated.nodes.*
@@ -9,6 +10,7 @@ import org.eclipse.cdt.core.dom.ast.{
   IASTBinaryExpression,
   IASTMacroExpansionLocation,
   IASTNode,
+  IASTPreprocessorFunctionStyleMacroDefinition,
   IASTPreprocessorMacroDefinition
 }
 import org.eclipse.cdt.internal.core.model.ASTStringUtil
@@ -141,8 +143,13 @@ trait MacroHandler { this: AstCreator =>
     val columnNumberEnd = columnEnd(macroDef)
     val offset_         = offset(macroDef)
 
+    val macroParameters = macroDef match {
+      case functionStyle: IASTPreprocessorFunctionStyleMacroDefinition => functionStyle.getParameters.toSeq
+      case _                                                           => Seq.empty
+    }
     val parameter = (1 to parameterCount).map { index =>
       val nameAndCode = s"p$index"
+      val cdtNode     = macroParameters.lift(index - 1).getOrElse(macroDef)
       new FunctionDeclNodePass.ParameterInfo(
         name = nameAndCode,
         code = nameAndCode,
@@ -151,7 +158,8 @@ trait MacroHandler { this: AstCreator =>
         evaluationStrategy = EvaluationStrategies.BY_VALUE,
         lineNumber = lineNumber,
         columnNumber = columnNumber,
-        typeFullName = Defines.Any
+        typeFullName = Defines.Any,
+        tags = C2CpgPlugin.parameterTags(config.plugins, cdtNode, index)
       )
     }
 
