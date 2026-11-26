@@ -44,12 +44,28 @@ class AstCreator(
   protected val methodAstParentStack: Stack[NewNode] = new Stack()
   protected val typeRefIdStack: Stack[NewTypeRef]    = new Stack()
 
+  private val createdNodes = scala.collection.mutable.ArrayBuffer.empty[NewNode]
+
+  /** The AST nodes this creator has stored, in the order it stored them; empty unless [[keepTranslationUnitNodes]]. */
+  private[c2cpg] def translationUnitNodes: collection.Seq[NewNode] = createdNodes
+
+  /** Whether [[storeAst]] remembers the nodes it stores for [[translationUnitNodes]]. Off unless a plug-in reads them,
+    * so a run without plug-ins does no extra work.
+    */
+  private[c2cpg] var keepTranslationUnitNodes: Boolean = false
+
+  /** Stores `ast` in [[diffGraph]], and remembers its nodes if [[keepTranslationUnitNodes]]. */
+  protected def storeAst(ast: Ast): Unit = {
+    if (keepTranslationUnitNodes) createdNodes.addAll(ast.nodes)
+    Ast.storeInDiffGraph(ast, diffGraph)
+  }
+
   def createAst(): DiffGraphBuilder = {
     val fileContent = if (!config.disableFileContent) Option(cdtAst.getRawSignature) else None
     val fileNode    = NewFile().name(fileName(cdtAst)).order(0)
     fileContent.foreach(fileNode.content(_))
     val ast = Ast(fileNode).withChild(astForTranslationUnit(cdtAst))
-    Ast.storeInDiffGraph(ast, diffGraph)
+    storeAst(ast)
     scope.createVariableReferenceLinks(diffGraph, filename)
     diffGraph
   }

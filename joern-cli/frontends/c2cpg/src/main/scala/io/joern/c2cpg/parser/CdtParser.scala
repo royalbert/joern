@@ -1,6 +1,7 @@
 package io.joern.c2cpg.parser
 
 import io.joern.c2cpg.Config
+import io.joern.c2cpg.plugin.C2CpgPlugin
 import io.joern.c2cpg.parser.JSONCompilationDatabaseParser.CompilationDatabase
 import io.joern.c2cpg.passes.AstCreationPass
 import io.joern.x2cpg.SourceFiles
@@ -10,7 +11,13 @@ import org.eclipse.cdt.core.dom.ast.gnu.c.GCCLanguage
 import org.eclipse.cdt.core.dom.ast.gnu.cpp.GPPLanguage
 import org.eclipse.cdt.core.dom.ast.{IASTPreprocessorStatement, IASTTranslationUnit}
 import org.eclipse.cdt.core.model.ILanguage
-import org.eclipse.cdt.core.parser.{DefaultLogService, FileContent, IncludeFileContentProvider, ScannerInfo}
+import org.eclipse.cdt.core.parser.{
+  DefaultLogService,
+  FileContent,
+  IScannerInfo,
+  IncludeFileContentProvider,
+  ScannerInfo
+}
 import org.slf4j.LoggerFactory
 
 import java.nio.file.{Files, Path, Paths}
@@ -201,9 +208,11 @@ class CdtParser(config: Config, headerFileFinder: HeaderFileFinder, compilationD
     accumulator: AstCreationPass.Accumulator
   ): ParseResult = {
     val relativeFilePath    = SourceFiles.toRelativePath(file.toString, config.inputPath)
-    val fileContentProvider = new CustomFileContentProvider(headerFileFinder, file.toString, accumulator)
-    val scannerInfo         = createScannerInfo(file)
-    safeParseInternal(fileContent, scannerInfo, fileContentProvider, lang, relativeFilePath)
+    val plugins             = config.plugins
+    val fileContentProvider = new CustomFileContentProvider(headerFileFinder, file.toString, accumulator, plugins)
+    val scannerInfo         = C2CpgPlugin.scannerInfo(plugins, file, createScannerInfo(file))
+    val content             = C2CpgPlugin.fileContent(plugins, file, fileContent)
+    safeParseInternal(content, scannerInfo, fileContentProvider, lang, relativeFilePath)
   }
 
   private def parseInternal(file: Path, lang: ILanguage, accumulator: AstCreationPass.Accumulator): ParseResult = {
@@ -219,7 +228,7 @@ class CdtParser(config: Config, headerFileFinder: HeaderFileFinder, compilationD
 
   private def safeParseInternal(
     fileContent: FileContent,
-    scannerInfo: ScannerInfo,
+    scannerInfo: IScannerInfo,
     fileContentProvider: CustomFileContentProvider,
     lang: ILanguage,
     relativeFilePath: String

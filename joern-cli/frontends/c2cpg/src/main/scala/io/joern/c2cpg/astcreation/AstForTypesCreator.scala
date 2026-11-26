@@ -546,8 +546,8 @@ trait AstForTypesCreator { this: AstCreator =>
       Ast(typeDecl).withChildren(finalModifier ++ memberAsts).withChild(initAst) +: declAsts
     }
     asts.foreach { ast =>
-      Ast.storeInDiffGraph(ast, diffGraph)
-      ast.root.foreach(r => diffGraph.addEdge(methodAstParentStack.head, r, EdgeTypes.AST))
+      storeAst(ast)
+      ast.root.foreach(root => diffGraph.addEdge(methodAstParentStack.head, root, EdgeTypes.AST))
     }
     typeRefNodeMaybe.map(Ast(_)).toSeq
   }
@@ -635,7 +635,7 @@ trait AstForTypesCreator { this: AstCreator =>
     val mAst              = methodAst(methodNode_, Nil, bodyAst, methodReturnNode_, modifiers)
 
     val functionBindingAst = createFunctionBinding(methodNode_)
-    Ast.storeInDiffGraph(functionBindingAst, diffGraph)
+    storeAst(functionBindingAst)
     mAst
   }
 
@@ -681,8 +681,8 @@ trait AstForTypesCreator { this: AstCreator =>
       Ast(typeDecl).withChildren(memberAsts).withChild(init) +: declAsts
     }
     asts.foreach { ast =>
-      Ast.storeInDiffGraph(ast, diffGraph)
-      ast.root.foreach(r => diffGraph.addEdge(methodAstParentStack.head, r, EdgeTypes.AST))
+      storeAst(ast)
+      ast.root.foreach(root => diffGraph.addEdge(methodAstParentStack.head, root, EdgeTypes.AST))
     }
     typeRefNodeMaybe.map(Ast(_)).toSeq
   }

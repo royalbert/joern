@@ -1,7 +1,7 @@
 package io.joern.dataflowengineoss.layers.dataflows
 
 import io.joern.dataflowengineoss.DefaultSemantics
-import io.joern.dataflowengineoss.passes.reachingdef.ReachingDefPass
+import io.joern.dataflowengineoss.passes.reachingdef.{DefinitionRule, ReachingDefPass}
 import io.joern.dataflowengineoss.semanticsloader.{FlowSemantic, FullNameSemantics, Semantics}
 import io.shiftleft.semanticcpg.layers.{LayerCreator, LayerCreatorContext, LayerCreatorOptions}
 
@@ -12,8 +12,14 @@ object OssDataFlow {
   def defaultOpts = new OssDataFlowOptions()
 }
 
-class OssDataFlowOptions(var maxNumberOfDefinitions: Int = 4000, var semantics: Semantics = DefaultSemantics())
-    extends LayerCreatorOptions {}
+/** @param definitionRules
+  *   the rules that decide what a call does to its arguments (see [[DefinitionRule]]); none by default
+  */
+class OssDataFlowOptions(
+  var maxNumberOfDefinitions: Int = 4000,
+  var semantics: Semantics = DefaultSemantics(),
+  var definitionRules: Seq[DefinitionRule] = Nil
+) extends LayerCreatorOptions {}
 
 class OssDataFlow(opts: OssDataFlowOptions)(implicit val semantics: Semantics = opts.semantics) extends LayerCreator {
 
@@ -21,6 +27,6 @@ class OssDataFlow(opts: OssDataFlowOptions)(implicit val semantics: Semantics = 
   override val description: String = OssDataFlow.description
 
   override def create(context: LayerCreatorContext): Unit = {
-    ReachingDefPass(context.cpg, opts.maxNumberOfDefinitions).createAndApply()
+    ReachingDefPass(context.cpg, opts.maxNumberOfDefinitions, opts.definitionRules).createAndApply()
   }
 }

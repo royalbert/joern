@@ -1,8 +1,10 @@
 package io.joern.c2cpg
 
+import io.joern.c2cpg.plugin.C2CpgPlugin
 import io.joern.c2cpg.parser.FileDefaults
 import io.joern.c2cpg.passes.*
 import io.joern.x2cpg.X2Cpg.withNewEmptyCpg
+import io.joern.x2cpg.plugin.FrontendPlugins
 import io.joern.x2cpg.{SourceFiles, X2CpgFrontend}
 import io.joern.x2cpg.passes.frontend.{MetaDataPass, TypeNodePass}
 import io.joern.x2cpg.utils.Report
@@ -21,15 +23,19 @@ class C2Cpg extends X2CpgFrontend {
   private val logger = LoggerFactory.getLogger(classOf[C2Cpg])
 
   def createCpg(config: Config): Try[Cpg] = {
-    withNewEmptyCpg(config.outputPath, config) { (cpg, config) =>
-      val report = new Report()
+    withNewEmptyCpg(config.outputPath, config) { (cpg, givenConfig) =>
+      val report  = new Report()
+      val plugins = C2CpgPlugin.load(givenConfig)
+      // The loaded and configured plug-ins, for every parse, including c2cpg's re-parse of a failed statement.
+      val config = givenConfig.withPlugins(plugins).withoutNamedPlugins
       new MetaDataPass(cpg, Languages.NEWC, config.inputPath).createAndApply()
 
       val preprocessedFiles    = allPreprocessedFiles(config)
       val srcFileExtensions    = gatherFileExtensions(config)
       val headerFileExtensions = Set(FileDefaults.CHeaderFileExtension)
 
-      val sourcePass = new AstCreationPass(cpg, preprocessedFiles, srcFileExtensions, config, report = report)
+      val sourcePass =
+        new AstCreationPass(cpg, preprocessedFiles, srcFileExtensions, config, report = report, plugins = plugins)
       sourcePass.createAndApply()
 
       val headerPass = new AstCreationPass(
@@ -38,7 +44,8 @@ class C2Cpg extends X2CpgFrontend {
         headerFileExtensions,
         config,
         previousAccumulator = Some(sourcePass.accumulatedState()),
-        report = report
+        report = report,
+        plugins = plugins
       )
       headerPass.createAndApply()
 
@@ -46,6 +53,7 @@ class C2Cpg extends X2CpgFrontend {
       new TypeDeclNodePass(cpg, config).createAndApply()
       new FunctionDeclNodePass(cpg, headerPass.unhandledMethodDeclarations(), config).createAndApply()
       new FullNameUniquenessPass(cpg).createAndApply()
+      if (plugins.nonEmpty) new FrontendPlugins.GraphPass(cpg, plugins).createAndApply()
       report.print()
     }
   }

@@ -2,14 +2,18 @@ package io.joern.joerncli
 
 import io.joern.console.cpgcreation.{CpgGenerator, cpgGeneratorForLanguage, guessLanguage}
 import io.joern.console.{FrontendConfig, InstallConfig}
+import io.joern.dataflowengineoss.plugin.DataFlowPlugin
 import io.joern.joerncli.CpgBasedTool.newCpgCreatedString
 import io.joern.x2cpg.frontendspecific.FrontendArgsDelimitor
-import io.shiftleft.codepropertygraph.generated.Languages
+import io.shiftleft.codepropertygraph.generated.{Cpg, Languages}
+import io.shiftleft.semanticcpg.Overlays
 import io.shiftleft.semanticcpg.language.*
+import io.shiftleft.semanticcpg.layers.{LayerCreator, LayerCreatorContext, LayerCreatorProvider}
 
 import java.nio.file.{Files, Paths}
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
+import scala.util.control.NonFatal
 import scala.util.{Failure, Success, Try}
 
 object JoernParse {
@@ -61,6 +65,19 @@ object JoernParse {
       .text("Maximum number of definitions in per-method data flow calculation")
       .action((x, c) => c.copy(maxNumDef = x))
 
+    opt[String]("data-flow-plugin")
+      .unbounded()
+      .text("run the data-flow plug-in with this name in the data flow calculation (a DataFlowPlugin)")
+      .action((name, config) => config.copy(dataFlowPlugins = config.dataFlowPlugins :+ name))
+
+    opt[String]("layer")
+      .unbounded()
+      .text(
+        "run the layers with this name (a LayerCreatorProvider) before and after the default overlays; ordered by " +
+          "their dependsOn"
+      )
+      .action((name, config) => config.copy(layers = config.layers :+ name))
+
     note("Misc")
     help("help").text("display this help message")
 
@@ -85,11 +102,28 @@ object JoernParse {
     installConfig: InstallConfig = InstallConfig()
   ): Try[String] = {
     for {
-      _        <- checkInputPath(config)
-      language <- getLanguage(config)
-      _        <- generateCpg(installConfig, frontendArgs, config, language)
-      _        <- applyDefaultOverlays(config, installConfig)
+      _               <- checkInputPath(config)
+      language        <- getLanguage(config)
+      _               <- Try(checkOverlaysFor(config))
+      dataFlowPlugins <- Try(PluginProviders.dataFlowPlugins(config.dataFlowPlugins))
+      layers          <- Try(checkedLayers(config.layers))
+      _               <- generateCpg(installConfig, frontendArgs, config, language)
+      _               <- applyDefaultOverlays(config, installConfig, dataFlowPlugins, layers)
     } yield newCpgCreatedString(config.outputCpgFile)
+  }
+
+  /** Named data-flow plug-ins and layers run with the overlays; fails before any graph is built when `--nooverlays`
+    * would skip them.
+    */
+  private def checkOverlaysFor(config: ParserConfig): Unit = {
+    val named =
+      config.dataFlowPlugins.map(name => s"--data-flow-plugin '$name'") ++ config.layers.map(name => s"--layer '$name'")
+    if (!config.enhance && named.nonEmpty) {
+      throw new IllegalArgumentException(
+        s"${named.mkString(", ")}: these run with the overlays, which --nooverlays turns off. Leave out " +
+          s"--nooverlays, or leave out ${named.mkString(" and ")} to build without them."
+      )
+    }
   }
 
   private def checkInputPath(config: ParserConfig): Try[Unit] = {
@@ -152,11 +186,36 @@ object JoernParse {
     }
   }
 
-  private def applyDefaultOverlays(config: ParserConfig, installConfig: InstallConfig): Try[String] = {
+  private def applyDefaultOverlays(
+    config: ParserConfig,
+    installConfig: InstallConfig,
+    dataFlowPlugins: Seq[DataFlowPlugin],
+    layers: Seq[LayerCreatorProvider]
+  ): Try[String] = {
     Try {
       println("[+] Applying default overlays")
       if (config.enhance) {
-        val cpg = DefaultOverlays.create(config.outputCpgFile, config.maxNumDef)
+        val cpg =
+          try {
+            DefaultOverlays.create(
+              config.outputCpgFile,
+              config.maxNumDef,
+              definitionRules = dataFlowPlugins.flatMap(_.definitionRule),
+              semantics = dataFlowPlugins.toList.flatMap(_.semantics),
+              beforeOverlays = cpg => applyLayers(cpg, PluginProviders.firstLayers(layers), "before")
+            )
+          } catch {
+            case NonFatal(exception) =>
+              failingPlugin(dataFlowPlugins, exception) match {
+                case Some(name) =>
+                  throw new RuntimeException(
+                    s"--data-flow-plugin '$name': the plug-in failed (see the cause below). Fix or update the " +
+                      s"plug-in jar that provides it, or leave out --data-flow-plugin '$name' to build without it.",
+                    exception
+                  )
+                case None => throw exception
+              }
+          }
         // With --overlaysonly no frontend ran, so `generator` is unset. Resolve a generator from the
         // CPG's language instead, so language-specific post-processing passes are still applied.
         val postProcessingGenerator = Option(generator).orElse {
@@ -172,9 +231,75 @@ object JoernParse {
                 "has no metadata node with a known language and appears to be broken."
             )
         }
-        cpg.close()
+        try {
+          applyLayers(cpg, PluginProviders.lastLayers(layers), "after")
+        } finally {
+          cpg.close()
+        }
       }
       "Code property graph generation successful"
+    }
+  }
+
+  /** The providers of the named layers; fails, before any graph is built, on an unknown name, a provider without a
+    * layer, or a cycle among the layers that run first or among those that run last.
+    */
+  private def checkedLayers(names: Seq[String]): Seq[LayerCreatorProvider] = {
+    val providers = PluginProviders.layers(names)
+    PluginProviders.firstLayers(providers)
+    PluginProviders.lastLayers(providers)
+    providers
+  }
+
+  /** The name of the data-flow plug-in whose code `exception` or one of its causes was thrown from, if any. */
+  private def failingPlugin(plugins: Seq[DataFlowPlugin], exception: Throwable): Option[String] = {
+    val frames =
+      Iterator.iterate(exception)(_.getCause).takeWhile(_ != null).flatMap(_.getStackTrace).map(_.getClassName).toSeq
+    plugins.collectFirst {
+      case plugin
+          if (plugin +: plugin.definitionRule.toSeq)
+            .exists(code => frames.exists(_.startsWith(code.getClass.getName.stripSuffix("$")))) =>
+        plugin.name
+    }
+  }
+
+  /** Runs `layers` on `cpg`, in the order given, `before` or `after` the default overlays: before them on the
+    * frontend's graph, or after the default overlays, the data-flow overlay and the frontend's post-processing passes.
+    *
+    * A named layer is never skipped: one that depends on a layer the graph does not have, or that was applied before,
+    * fails the run before it starts. A layer that throws fails the run too. When a layer that runs after the overlays
+    * fails, the stored graph keeps the default overlays and every layer that finished, and does not list the failed
+    * layer among its overlays; when one that runs before them fails, the stored graph is the frontend's.
+    */
+  private def applyLayers(cpg: Cpg, layers: Seq[(LayerCreatorProvider, LayerCreator)], when: String): Unit = {
+    val context = new LayerCreatorContext(cpg)
+    layers.foreach { case (provider, layer) =>
+      val applied = Overlays.appliedOverlays(cpg)
+      val missing = layer.dependsOn.filterNot(applied.contains)
+      if (missing.nonEmpty) {
+        throw new RuntimeException(
+          s"--layer '${provider.name}': it depends on ${missing.mkString(", ")}, which the graph does not have " +
+            s"(it has ${applied.mkString(", ")}). Also name the layers it depends on with --layer, or leave out " +
+            s"--layer '${provider.name}' to build without it."
+        )
+      }
+      if (applied.contains(layer.overlayName)) {
+        throw new RuntimeException(
+          s"--layer '${provider.name}': its overlay ${layer.overlayName} is already in the graph. Leave out " +
+            s"--layer '${provider.name}', or build from a graph without it."
+        )
+      }
+      println(s"[+] Applying layer ${provider.name} $when the default overlays")
+      try {
+        layer.run(context)
+      } catch {
+        case NonFatal(exception) =>
+          throw new RuntimeException(
+            s"--layer '${provider.name}': the layer failed (see the cause below). Fix or update the plug-in jar " +
+              s"that provides it, or leave out --layer '${provider.name}' to build without it.",
+            exception
+          )
+      }
     }
   }
 
@@ -186,7 +311,9 @@ object JoernParse {
     enhanceOnly: Boolean = false,
     language: String = "",
     listLanguages: Boolean = false,
-    maxNumDef: Int = DefaultOverlays.defaultMaxNumberOfDefinitions
+    maxNumDef: Int = DefaultOverlays.defaultMaxNumberOfDefinitions,
+    dataFlowPlugins: Seq[String] = Seq.empty,
+    layers: Seq[String] = Seq.empty
   )
 
   private def parseConfig(parserArgs: Seq[String]): Try[ParserConfig] = {

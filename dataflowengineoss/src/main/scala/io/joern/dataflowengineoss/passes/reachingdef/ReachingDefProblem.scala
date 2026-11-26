@@ -6,6 +6,7 @@ import io.shiftleft.semanticcpg.language.*
 import io.shiftleft.semanticcpg.utils.MemberAccess.{isFieldAccess, isGenericMemberAccessName}
 import org.slf4j.{Logger, LoggerFactory}
 
+import scala.annotation.tailrec
 import scala.collection.{Set, mutable}
 
 /** The variables defined/used in the reaching def problem can all be represented via nodes in the graph, however,
@@ -20,9 +21,14 @@ object Definition {
 }
 
 object ReachingDefProblem {
-  def create(method: Method): DataFlowProblem[CfgNode, mutable.BitSet] = {
+
+  /** The reaching-definition problem of `method`, in which `definitionRules` decide what a call does to its arguments
+    * (see [[DefinitionRule]]). The rules are used as given: whether each applies to the graph is the caller's to
+    * decide, as [[ReachingDefPass]] does.
+    */
+  def create(method: Method, definitionRules: Seq[DefinitionRule] = Nil): DataFlowProblem[CfgNode, mutable.BitSet] = {
     val flowGraph = new ReachingDefFlowGraph(method)
-    create(flowGraph, new OptimizedReachingDefTransferFunction(flowGraph))
+    create(flowGraph, new OptimizedReachingDefTransferFunction(flowGraph, definitionRules))
   }
 
   /** The problem of `flowGraph` with `transfer`, whose `gen` is built when the solver first reads it. */
@@ -176,7 +182,8 @@ class ReachingDefFlowGraph(val method: Method) extends FlowGraph[CfgNode] {
 
 /** For each node of the graph, this transfer function defines how it affects the propagation of definitions.
   */
-class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends TransferFunction[CfgNode, mutable.BitSet] {
+class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph, definitionRules: Seq[DefinitionRule] = Nil)
+    extends TransferFunction[CfgNode, mutable.BitSet] {
 
   private val nodeToNumber = flowGraph.nodeToNumber
 
@@ -193,15 +200,16 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
   private[reachingdef] lazy val numberOfDefinitions: Int =
     method.parameter.size + definingCalls(method).iterator.map(definitionsOf(_).size).sum
 
-  /** For each call, the definitions it kills: for each definition it generates, the other definitions of the same
-    * variable. Built on first use, from [[killIndex]]. The transfer function does not read it; it reads [[killMasks]].
+  /** For each call, the definitions it kills: for each definition whose variable it cuts off, the other definitions of
+    * the same variable. Built on first use, from [[killIndex]]. The transfer function does not read it; it reads
+    * [[killMasks]].
     */
   lazy val kill: Map[CfgNode, mutable.BitSet] =
     initKill(method, gen).withDefaultValue(mutable.BitSet())
 
-  /** For each call, one array per variable it defines, holding all definitions of that variable, the call's own
-    * included. The calls that define a variable share its array, so the masks take space in proportion to the number of
-    * definitions in the method. Removing a call's masks from `in` and adding `gen` back gives `gen ∪ (in \ kill)`: a
+  /** For each call, one array per variable it cuts off, holding all definitions of that variable, the call's own
+    * included. The calls that cut off a variable share its array, so the masks take space in proportion to the number
+    * of definitions in the method. Removing a call's masks from `in` and adding `gen` back gives `gen ∪ (in \ kill)`: a
     * definition outside `gen` is removed exactly when `kill` holds it, and `gen` is in both. Built on first use;
     * [[ReachingDefPass]] decides from [[numberOfDefinitions]] whether to skip a method, so a method it skips never
     * builds them.
@@ -239,18 +247,75 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
   private def definingCalls(method: Method): List[Call] =
     method.call.filterNot(call => isFieldAccess(call.name)).l
 
-  /** The definitions `call` generates: its own, and its identifier and call arguments' unless it is a ternary. */
+  /** The rules of `definitionRules` for `method`, built on first use. */
+  private lazy val ruleFor: Seq[Call => Expression => ArgumentDecision] = definitionRules.map(_.forMethod(method))
+
+  /** Each call's arguments that can be definitions, with what the call does to each (see [[argumentEffects]]). */
+  private val effectsOfCall = mutable.HashMap.empty[Call, List[(Expression, ArgumentEffect)]]
+
+  /** The identifier and call arguments of `call`, with what `call` does to each: the changes of the rules asked, in
+    * their order up to the first that does not pass the argument on, and Joern's default if none of them stopped (see
+    * [[DefinitionRule]]). Each rule is asked at most once per call and argument.
+    */
+  private[reachingdef] def argumentEffects(call: Call): List[(Expression, ArgumentEffect)] = {
+    // Ternary only reads its operands; gen on args kills prior defs.
+    val default = if (isReadOnlyShortCircuitOperator(call)) ArgumentEffect.NoChange else ArgumentEffect.Overwrites
+    @tailrec
+    def decided(
+      argument: Expression,
+      rules: List[Call => Expression => ArgumentDecision],
+      effect: ArgumentEffect
+    ): ArgumentEffect =
+      rules match {
+        case Nil          => effect.and(default)
+        case rule :: rest =>
+          val decision = rule(call)(argument)
+          val changed  = effect.and(decision.effect)
+          if (decision.passOn) decided(argument, rest, changed) else changed
+      }
+    def effects =
+      call.argument
+        .filter(hasValidGenType)
+        .l
+        .map(argument => argument -> decided(argument, ruleFor.toList, ArgumentEffect.NoChange))
+    if (ruleFor.isEmpty) effects else effectsOfCall.getOrElseUpdate(call, effects)
+  }
+
+  /** The definitions `call` generates: its own, and those of its identifier and call arguments that it defines (see
+    * [[argumentEffects]]).
+    */
   private[reachingdef] def definitionsOf(call: Call): List[Definition] = {
     val retVal = List(call)
-    // Ternary only reads its operands; gen on args kills prior defs.
-    val args =
-      if (isReadOnlyShortCircuitOperator(call)) Iterator.empty
-      else call.argument.filter(hasValidGenType)
+    val args   = argumentEffects(call).collect { case (argument, effect) if effect.defines => argument }
     (retVal ++ args).collect {
       case node if nodeToNumber.contains(node) =>
         Definition.fromNode(node.asInstanceOf[CfgNode], nodeToNumber)
     }
   }
+
+  /** The definitions whose variables `call` cuts off: those it generates, except the arguments it defines without
+    * cutting off, and the arguments it cuts off without defining (see [[argumentEffects]]). Without rules, exactly
+    * [[gen]] of `call`.
+    */
+  private[reachingdef] def cutOffDefinitionsOf(call: Call, gen: Map[CfgNode, mutable.BitSet]): mutable.BitSet =
+    if (ruleFor.isEmpty) gen(call)
+    else {
+      val effects   = argumentEffects(call)
+      val passOn    = effects.collect { case (argument, effect) if effect.defines && !effect.cutsOff => argument }.toSet
+      val cutOnly   = effects.collect { case (argument, effect) if !effect.defines && effect.cutsOff => argument }
+      val generated = gen(call).filterNot(definition => passOn.contains(flowGraph.numberToNode(definition)))
+      generated ++ cutOnly.collect {
+        case node if nodeToNumber.contains(node) => Definition.fromNode(node, nodeToNumber)
+      }
+    }
+
+  /** The tags the rules give the arguments of the method's calls, in the order of the calls and their arguments. */
+  private[reachingdef] def argumentTags: List[(Expression, Seq[(String, String)])] =
+    if (ruleFor.isEmpty) Nil
+    else
+      definingCalls(method).flatMap(argumentEffects).collect {
+        case (argument, effect) if effect.tags.nonEmpty => argument -> effect.tags
+      }
 
   /** Ternary must not gen its operand arguments. */
   private def isReadOnlyShortCircuitOperator(call: Call): Boolean =
@@ -331,9 +396,9 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
   private def killingCalls(method: Method): Iterator[Call] =
     method.call.filterNot(call => isGenericMemberAccessName(call.name))
 
-  /** Initialize the map `kill`, a map that contains killed definitions for each flow graph node: the only way in which
-    * a call can kill another definition is by generating a new definition for the same variable, so for each definition
-    * in `gen(call)`, the other definitions of its variable.
+  /** Initialize the map `kill`, a map that contains killed definitions for each flow graph node: for each definition
+    * whose variable the call cuts off ([[cutOffDefinitionsOf]]; without rules, those in `gen(call)`), the other
+    * definitions of its variable.
     *
     * All operations in our graph are represented by calls and non-operations such as identifiers or field-identifiers
     * have empty gen and kill sets, meaning that they just pass on definitions unaltered.
@@ -341,7 +406,7 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
   private[reachingdef] def initKill(method: Method, gen: Map[CfgNode, mutable.BitSet]): Map[CfgNode, mutable.BitSet] =
     killingCalls(method).map { call =>
       val killed = mutable.BitSet()
-      gen(call).foreach { definition =>
+      cutOffDefinitionsOf(call, gen).foreach { definition =>
         variableOf(definition).foreach(variable =>
           killIndex(variable).foreach(other => if (other != definition) killed += other)
         )
@@ -355,7 +420,7 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
     gen: Map[CfgNode, mutable.BitSet]
   ): Map[CfgNode, Array[Array[Definition]]] =
     killingCalls(method).map { call =>
-      call -> gen(call).iterator
+      call -> cutOffDefinitionsOf(call, gen).iterator
         .flatMap(definition => variableOf(definition).map(_ -> definition))
         .distinctBy(_._1)
         .flatMap { case (variable, definition) =>
@@ -373,8 +438,8 @@ class ReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph) extends Trans
   * need not be propagated through the entire graph only to determine that they reach the exit node. Instead, when
   * creating reaching definition edges, we simply create edges from the identifier to the exit node.
   */
-class OptimizedReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph)
-    extends ReachingDefTransferFunction(flowGraph) {
+class OptimizedReachingDefTransferFunction(flowGraph: ReachingDefFlowGraph, definitionRules: Seq[DefinitionRule] = Nil)
+    extends ReachingDefTransferFunction(flowGraph, definitionRules) {
 
   lazy val loneIdentifiers: Map[Call, List[Definition]] = {
     val identifiersInReturns = method._returnViaContainsOut.ast.isIdentifier.name.l
